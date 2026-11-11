@@ -74,7 +74,7 @@
 ## 6. 翻译数据流
 
 ```
-GtkText changed
+GtkTextView buffer changed
   → 若 auto_translate：重置 debounce 计时器
   → 计时器触发 / Ctrl+Enter
   → detect_language(text)
@@ -85,7 +85,7 @@ GtkText changed
 ```
 
 - 空输入：清空结果，不请求。
-- 输入法 preedit：`GtkText` 的 buffer 在 commit 后才变化；若实测 fcitx5 在 preedit 期间触发 `changed`，则在 IM context 的 preedit 区间内暂停计时（见 `ui.md` 风险）。
+- 输入法 preedit：`GtkTextView` 的 buffer 在 commit 后才变化；若实测 fcitx5 在 preedit 期间触发 `changed`，则在 IM context 的 preedit 区间内暂停计时（见 `ui.md` 风险）。
 - 同一 `(provider, text, from, to)` 命中内存缓存则直接返回。
 
 ## 7. 数据模型

@@ -42,7 +42,7 @@ impl ProviderRow {
         root.set_margin_bottom(10);
 
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        header.set_margin_top(12);
+        header.set_margin_top(6);
         header.set_margin_start(12);
         header.set_margin_end(12);
         header.append(&provider_logo(id));
@@ -304,7 +304,7 @@ impl KeyField {
 struct UiState {
     window: adw::ApplicationWindow,
     nav: adw::NavigationView,
-    input: gtk::Text,
+    input: gtk::TextView,
     direction: gtk::Label,
     translate_button: gtk::Button,
     settings_button: gtk::Button,
@@ -327,6 +327,7 @@ struct UiState {
 
 impl UiState {
     fn new(app: &adw::Application) -> Rc<Self> {
+        install_css();
         let loaded = config::load();
         let (credentials, _) = secrets::load();
 
@@ -351,23 +352,24 @@ impl UiState {
         settings_button.set_tooltip_text(Some("设置 (Ctrl+,)"));
         header.pack_end(&settings_button);
 
-        let input = gtk::Text::new();
+        let input = gtk::TextView::new();
         input.set_hexpand(true);
-        input.set_vexpand(false);
-        input.set_max_length(5000);
-        input.set_input_purpose(gtk::InputPurpose::FreeForm);
-        set_text_font(&input, 15);
-        input.set_margin_top(12);
-        input.set_margin_bottom(12);
-        input.set_margin_start(12);
-        input.set_margin_end(12);
+        input.set_vexpand(true);
+        input.set_valign(gtk::Align::Fill);
+        input.set_wrap_mode(gtk::WrapMode::WordChar);
+        input.set_accepts_tab(false);
+        input.set_top_margin(12);
+        input.set_bottom_margin(12);
+        input.set_left_margin(12);
+        input.set_right_margin(12);
+        input.add_css_class("input-text");
 
         let input_scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
             .min_content_height(150)
             .max_content_height(260)
-            .propagate_natural_height(true)
+            .propagate_natural_height(false)
             .has_frame(false)
             .child(&input)
             .build();
@@ -393,11 +395,14 @@ impl UiState {
         input_header.append(&direction);
         input_header.append(&translate_button);
 
+        input_scrolled.set_vexpand(false);
         let input_card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        input_card.set_vexpand(false);
         input_card.add_css_class("card");
         input_card.append(&input_scrolled);
 
         let input_section = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        input_section.set_vexpand(false);
         input_section.append(&input_header);
         input_section.append(&input_card);
 
@@ -426,7 +431,7 @@ impl UiState {
 
         let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
         content.set_vexpand(true);
-        content.set_margin_top(14);
+        content.set_margin_top(24);
         content.set_margin_bottom(14);
         content.set_margin_start(24);
         content.set_margin_end(24);
@@ -495,8 +500,8 @@ impl UiState {
 
     fn attach(self: &Rc<Self>) {
         let state = self.clone();
-        self.input.connect_changed(move |input| {
-            state.on_input_changed(input);
+        self.input.buffer().connect_changed(move |_| {
+            state.on_input_changed();
         });
 
         let state = self.clone();
@@ -541,10 +546,10 @@ impl UiState {
                 return glib::Propagation::Stop;
             }
             if keyval == gtk::gdk::Key::Escape {
-                if state.input.text().is_empty() {
+                if text_view_text(&state.input).is_empty() {
                     state.window.close();
                 } else {
-                    state.input.set_text("");
+                    state.input.buffer().set_text("");
                 }
                 return glib::Propagation::Stop;
             }
@@ -592,8 +597,8 @@ impl UiState {
         }
     }
 
-    fn on_input_changed(self: &Rc<Self>, input: &gtk::Text) {
-        let text = input.text().to_string();
+    fn on_input_changed(self: &Rc<Self>) {
+        let text = text_view_text(&self.input);
         let detection = lang::detect(&text);
         self.update_direction(detection);
 
@@ -654,7 +659,7 @@ impl UiState {
 
     fn translate_now(self: &Rc<Self>) {
         self.cancel_debounce();
-        let text = self.input.text().trim().to_string();
+        let text = text_view_text(&self.input).trim().to_string();
         if text.is_empty() {
             self.clear_results();
             return;
@@ -1162,6 +1167,28 @@ fn apply_app_id(window: &adw::ApplicationWindow) {
     }
 }
 
+fn text_view_text(view: &gtk::TextView) -> String {
+    let buffer = view.buffer();
+    buffer
+        .text(&buffer.start_iter(), &buffer.end_iter(), true)
+        .to_string()
+}
+
+fn install_css() {
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(
+        "textview.input-text { font-size: 15px; background: transparent; }\n\
+         textview.input-text text { font-size: 15px; }",
+    );
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+}
+
 fn set_label_font(label: &gtk::Label, size: i32, bold: bool) {
     let attrs = gtk::pango::AttrList::new();
     attrs.insert(gtk::pango::AttrSize::new(size * gtk::pango::SCALE));
@@ -1169,12 +1196,6 @@ fn set_label_font(label: &gtk::Label, size: i32, bold: bool) {
         attrs.insert(gtk::pango::AttrInt::new_weight(gtk::pango::Weight::Bold));
     }
     label.set_attributes(Some(&attrs));
-}
-
-fn set_text_font(text: &gtk::Text, size: i32) {
-    let attrs = gtk::pango::AttrList::new();
-    attrs.insert(gtk::pango::AttrSize::new(size * gtk::pango::SCALE));
-    text.set_attributes(Some(&attrs));
 }
 
 fn provider_logo(id: &str) -> gtk::Image {
