@@ -143,8 +143,6 @@ impl Provider for Volcengine {
                     return Ok(TranslateOutput {
                         text,
                         detected: item.detected_language.as_deref().and_then(Lang::from_code),
-                        phonetics: None,
-                        audio: None,
                         latency_ms: None,
                     });
                 }

@@ -153,8 +153,6 @@ impl Provider for Alibaba {
                 .and_then(|value| value.as_str())
                 .and_then(Lang::from_code)
                 .or(Some(request.from)),
-            phonetics: None,
-            audio: None,
             latency_ms: None,
         })
     }

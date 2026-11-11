@@ -20,12 +20,10 @@ pub struct TranslateRequest {
 }
 
 #[derive(Debug, Clone, Default)]
-/// 一个 provider 的成功结果；音标/音频字段为 v1.1 预留。
+/// 一个 provider 的成功结果；音标/音频由 `pronunciation` 后处理，不经过 provider。
 pub struct TranslateOutput {
     pub text: String,
     pub detected: Option<Lang>,
-    pub phonetics: Option<String>,
-    pub audio: Option<Vec<u8>>,
     pub latency_ms: Option<u64>,
 }
 

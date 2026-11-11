@@ -231,8 +231,6 @@ impl Provider for Bing {
             return Ok(TranslateOutput {
                 text: translation.text,
                 detected: Some(request.from),
-                phonetics: None,
-                audio: None,
                 latency_ms: None,
             });
         }

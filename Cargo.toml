@@ -39,6 +39,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 zeroize = { version = "1", features = ["derive"] }
+msedge-tts = "0.4"
+rodio = { version = "0.23", default-features = false, features = ["playback", "mp3"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [dev-dependencies]
 assert_cmd = "2"
