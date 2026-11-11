@@ -157,7 +157,7 @@ window-rule {
 - 语言：Rust
 - GUI：GTK4 + libadwaita（gtk4-rs / libadwaita-rs），优先保证 fcitx5 / text-input-v3 输入体验
 - HTTP：reqwest + rustls，异步运行时 tokio
-- 单实例：GApplication 唯一实例，重复执行 `stfn` 只聚焦已有窗口
+- 进程模型：v0.1 使用 GApplication 单实例；v0.2 规划改为每次启动新进程
 - 密钥：Secret Service（keyring/zbus）优先，`0600` 凭据文件兜底
 - 通知：D-Bus `org.freedesktop.Notifications`
 - 音频：PipeWire
@@ -185,7 +185,7 @@ v0.1.0 已完成：翻译窗口 + 应用内设置 + Bing / 火山 / 阿里 + CLI
 
 版本总结见 `docs/versions/v0.1.0.md`。
 
-v0.2 规划中：英文音标/发音、系统主题、输入聚焦、niri 选区翻译。详见 `docs/tech/v0.2-plan.md`。
+v0.2 规划中：英文音标/发音、系统主题、输入聚焦、niri 选区翻译，并改为每次启动新进程。详见 `docs/tech/v0.2-plan.md`。
 
 ## License
 
