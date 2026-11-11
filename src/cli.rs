@@ -2,6 +2,7 @@
 //!
 //! 退出码约定：0 至少一个成功；1 运行时失败；2 用法/输入/配置错误。
 use std::io::Read;
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
@@ -9,9 +10,11 @@ use serde::Serialize;
 
 use crate::config::{self, Config, SourceChoice};
 use crate::lang::{self, Detection, Lang};
+use crate::pronunciation::{self, Accent, PronunciationService};
 use crate::providers;
 use crate::secrets;
-use crate::translate::{self, ProviderError, TranslateRequest};
+use crate::translate::{self, ProviderError, TranslateOutput, TranslateRequest};
+use crate::tts::{self, EdgeTts};
 
 #[derive(Parser, Debug)]
 #[command(name = "stfn", version, about = "Simple Translator For Niri")]
@@ -40,29 +43,51 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
-/// 子命令：目前只有应用内设置页。
+/// 子命令：应用内设置页或选区翻译；两者都是 GUI 启动意图。
 pub enum Command {
     /// 打开应用内设置页
     Settings,
+    /// 读取 primary selection 并自动翻译
+    Selection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// 参数分派结果：GUI（可带 settings 标记）或一次性 CLI。
+/// GUI 启动意图；由 clap 参数解析，不涉及跨进程转发。
+pub enum GuiIntent {
+    Open,
+    Settings,
+    Selection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 参数分派结果：GUI（带启动意图）或一次性 CLI。
 pub enum Mode {
-    Gui { settings: bool },
+    Gui { intent: GuiIntent },
     Cli,
 }
 
 impl Cli {
-    /// 无文本且无 flag -> GUI；settings -> 设置页；其余按 CLI 执行。
+    /// 无文本且无 flag -> GUI 主窗口；settings / selection -> 对应 GUI 意图。
     pub fn mode(&self) -> Mode {
-        if matches!(self.command, Some(Command::Settings)) {
-            return Mode::Gui { settings: true };
+        match self.command {
+            Some(Command::Settings) => {
+                return Mode::Gui {
+                    intent: GuiIntent::Settings,
+                };
+            }
+            Some(Command::Selection) => {
+                return Mode::Gui {
+                    intent: GuiIntent::Selection,
+                };
+            }
+            None => {}
         }
         let has_flag =
             self.to.is_some() || self.source.is_some() || self.notify || self.speak || self.json;
         if self.text.is_empty() && !has_flag {
-            Mode::Gui { settings: false }
+            Mode::Gui {
+                intent: GuiIntent::Open,
+            }
         } else {
             Mode::Cli
         }
@@ -74,10 +99,6 @@ pub fn run(cli: Cli) -> i32 {
     if cli.notify && cli.json {
         eprintln!("--notify 与 --json 不能同时使用");
         return 2;
-    }
-    if cli.speak {
-        eprintln!("朗读功能将在 v1.1 提供");
-        return 1;
     }
 
     let loaded = config::load();
@@ -114,6 +135,12 @@ pub fn run(cli: Cli) -> i32 {
             return 2;
         }
     };
+
+    // v0.2 朗读只支持英文译文；中文目标在请求网络前直接拒绝。
+    if cli.speak && target != Lang::En {
+        eprintln!("朗读仅支持英文译文");
+        return 1;
+    }
 
     let ids = match resolve_sources(&cli, &config) {
         Ok(ids) => ids,
@@ -185,46 +212,84 @@ pub fn run(cli: Cli) -> i32 {
     }
 
     if cli.json {
-        print_json(&text, from, target, &successes, &failures);
-        return if successes.is_empty() { 1 } else { 0 };
-    }
-
-    if cli.notify {
-        let Some((_, output)) = successes.first() else {
-            for (id, error) in &failures {
-                eprintln!("{id}: {error}");
-            }
+        let phonetics = json_phonetics(&runtime, &client, &successes);
+        print_json(&text, from, target, &successes, &failures, &phonetics);
+        if successes.is_empty() {
             return 1;
-        };
+        }
+    } else if successes.is_empty() {
+        for (id, error) in &failures {
+            eprintln!("{id}: {error}");
+        }
+        return 1;
+    } else if cli.notify {
+        let output = &successes[0].1;
         let title = format!("STFN · {} → {}", from.label(), target.label());
         if let Err(message) = crate::notify::send(&title, &truncate(&output.text, 200)) {
             eprintln!("{message}");
             return 1;
         }
-        return 0;
-    }
-
-    for (id, error) in &failures {
-        eprintln!("{id}: {error}");
-    }
-
-    if successes.is_empty() {
-        return 1;
-    }
-
-    if successes.len() == 1 {
-        println!("{}", successes[0].1.text);
     } else {
-        for (index, (id, output)) in successes.iter().enumerate() {
-            if index > 0 {
-                println!();
+        for (id, error) in &failures {
+            eprintln!("{id}: {error}");
+        }
+
+        if successes.len() == 1 {
+            println!("{}", successes[0].1.text);
+        } else {
+            for (index, (id, output)) in successes.iter().enumerate() {
+                if index > 0 {
+                    println!();
+                }
+                println!("[{id}]");
+                println!("{}", output.text);
             }
-            println!("[{id}]");
-            println!("{}", output.text);
+        }
+    }
+
+    // 先输出译文/通知/JSON，再朗读；朗读失败不吞掉已经输出的结果，但退出码为 1。
+    if cli.speak {
+        if let Err(message) = speak(&runtime, &successes[0].1.text) {
+            eprintln!("{message}");
+            return 1;
         }
     }
 
     0
+}
+
+// --speak：英文译文用 Edge TTS 合成并播放到结束；默认 US 音色。
+fn speak(runtime: &tokio::runtime::Runtime, text: &str) -> Result<(), String> {
+    let tts = Arc::new(EdgeTts::new());
+    let bytes = runtime
+        .block_on(tts.synthesize(text, Accent::Us))
+        .ok_or_else(|| "朗读不可用，请检查网络或音频设备".to_string())?;
+    tts::play_blocking(bytes)
+}
+
+// --json 的 phonetic 字段：只查英文单词，取 US > UK > generic 的首选 IPA。
+fn json_phonetics(
+    runtime: &tokio::runtime::Runtime,
+    client: &reqwest::Client,
+    successes: &[(String, TranslateOutput)],
+) -> Vec<Option<String>> {
+    let service = PronunciationService::new(client.clone());
+    runtime.block_on(async {
+        let lookups = successes.iter().map(|(_, output)| {
+            let text = output.text.trim().to_string();
+            let service = &service;
+            async move {
+                if !pronunciation::is_word(&text) {
+                    return None;
+                }
+                service
+                    .lookup(&text)
+                    .await
+                    .and_then(|result| result.preferred_ipa().map(str::to_string))
+            }
+        });
+        futures::future::join_all(lookups).await
+    })
 }
 
 // 文本来源：argv 用空格连接，或唯一参数 `-` 从 stdin 读取。
@@ -353,6 +418,7 @@ fn print_json(
     target: Lang,
     successes: &[(String, translate::TranslateOutput)],
     failures: &[(String, ProviderError)],
+    phonetics: &[Option<String>],
 ) {
     let output = JsonOutput {
         input: input.to_string(),
@@ -360,11 +426,12 @@ fn print_json(
         target: target.code(),
         results: successes
             .iter()
-            .map(|(provider, result)| JsonResult {
+            .enumerate()
+            .map(|(index, (provider, result))| JsonResult {
                 provider: provider.clone(),
                 text: result.text.clone(),
                 detected_source: result.detected.map(Lang::code),
-                phonetic: result.phonetics.clone(),
+                phonetic: phonetics.get(index).cloned().flatten(),
                 latency_ms: result.latency_ms,
             })
             .collect(),
