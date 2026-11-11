@@ -37,21 +37,17 @@ struct ProviderRow {
 
 impl ProviderRow {
     fn new(id: &'static str, on_retry: Rc<dyn Fn()>) -> Self {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        root.set_margin_top(10);
-        root.set_margin_bottom(10);
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        root.set_margin_top(12);
+        root.set_margin_bottom(12);
         root.set_margin_start(ROW_INSET);
         root.set_margin_end(ROW_INSET);
 
-        let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let dot = gtk::Label::new(Some("●"));
-        dot.add_css_class("caption");
-        dot.add_css_class("accent");
-        header.append(&dot);
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        header.append(&provider_logo(id));
 
         let name = gtk::Label::new(Some(provider_label(id)));
-        name.add_css_class("caption");
-        name.add_css_class("heading");
+        set_label_font(&name, 15, true);
         name.set_xalign(0.0);
         header.append(&name);
 
@@ -60,7 +56,7 @@ impl ProviderRow {
         header.append(&spacer);
 
         let phonetic = gtk::Label::new(None);
-        phonetic.add_css_class("caption");
+        set_label_font(&phonetic, 13, false);
         phonetic.add_css_class("dim-label");
         phonetic.set_visible(false);
         header.append(&phonetic);
@@ -84,6 +80,7 @@ impl ProviderRow {
         root.append(&header);
 
         let body = gtk::Label::new(None);
+        set_label_font(&body, 17, false);
         body.set_wrap(true);
         body.set_selectable(true);
         body.set_xalign(0.0);
@@ -91,6 +88,7 @@ impl ProviderRow {
         root.append(&body);
 
         let error = gtk::Label::new(None);
+        set_label_font(&error, 13, false);
         error.set_wrap(true);
         error.set_xalign(0.0);
         error.add_css_class("error");
@@ -354,8 +352,9 @@ impl UiState {
         input.set_max_length(5000);
         input.set_placeholder_text(Some("输入中文或英文，自动翻译"));
         input.set_input_purpose(gtk::InputPurpose::FreeForm);
-        input.set_margin_top(10);
-        input.set_margin_bottom(10);
+        set_text_font(&input, 16);
+        input.set_margin_top(12);
+        input.set_margin_bottom(12);
         input.set_margin_start(10);
         input.set_margin_end(10);
 
@@ -369,9 +368,8 @@ impl UiState {
             .build();
 
         let direction = gtk::Label::new(None);
-        direction.add_css_class("caption");
+        set_label_font(&direction, 13, true);
         direction.add_css_class("accent");
-        direction.add_css_class("heading");
         direction.set_xalign(0.0);
         direction.set_visible(false);
 
@@ -398,6 +396,7 @@ impl UiState {
         divider.set_margin_bottom(2);
 
         let status = gtk::Label::new(None);
+        set_label_font(&status, 14, false);
         status.set_wrap(true);
         status.set_xalign(0.0);
         status.set_margin_start(10);
@@ -413,11 +412,11 @@ impl UiState {
             .child(&results_box)
             .build();
 
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        content.set_margin_top(12);
-        content.set_margin_bottom(12);
-        content.set_margin_start(12);
-        content.set_margin_end(12);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        content.set_margin_top(14);
+        content.set_margin_bottom(14);
+        content.set_margin_start(14);
+        content.set_margin_end(14);
         content.append(&input_card);
         content.append(&divider);
         content.append(&status);
@@ -893,6 +892,7 @@ fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
     bing.set_title("Bing");
     bing.set_subtitle("免密钥，非官方接口");
     bing.set_active(state.config.borrow().providers.bing.enabled);
+    bing.add_prefix(&provider_logo("bing"));
     providers_group.add(&bing);
 
     let credentials = state.credentials.borrow();
@@ -928,6 +928,7 @@ fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
     volc.set_show_enable_switch(true);
     volc.set_enable_expansion(state.config.borrow().providers.volcengine.enabled);
     volc.set_expanded(state.config.borrow().providers.volcengine.enabled);
+    volc.add_prefix(&provider_logo("volcengine"));
     volc.add_row(&volc_ak.row);
     volc.add_row(&volc_sk.row);
     providers_group.add(&volc);
@@ -938,6 +939,7 @@ fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
     alibaba.set_show_enable_switch(true);
     alibaba.set_enable_expansion(state.config.borrow().providers.alibaba.enabled);
     alibaba.set_expanded(state.config.borrow().providers.alibaba.enabled);
+    alibaba.add_prefix(&provider_logo("alibaba"));
     alibaba.add_row(&ali_id.row);
     alibaba.add_row(&ali_secret.row);
     providers_group.add(&alibaba);
@@ -1139,6 +1141,46 @@ fn apply_app_id(window: &adw::ApplicationWindow) {
             toplevel.set_application_id("stfn");
         }
     }
+}
+
+fn set_label_font(label: &gtk::Label, size: i32, bold: bool) {
+    let attrs = gtk::pango::AttrList::new();
+    attrs.insert(gtk::pango::AttrSize::new(size * gtk::pango::SCALE));
+    if bold {
+        attrs.insert(gtk::pango::AttrInt::new_weight(gtk::pango::Weight::Bold));
+    }
+    label.set_attributes(Some(&attrs));
+}
+
+fn set_text_font(text: &gtk::Text, size: i32) {
+    let attrs = gtk::pango::AttrList::new();
+    attrs.insert(gtk::pango::AttrSize::new(size * gtk::pango::SCALE));
+    text.set_attributes(Some(&attrs));
+}
+
+fn provider_logo(id: &str) -> gtk::Image {
+    let data: Option<&'static [u8]> = match id {
+        "bing" => Some(&include_bytes!("../../assets/logos/bing.png")[..]),
+        "volcengine" => Some(&include_bytes!("../../assets/logos/volcengine.png")[..]),
+        "alibaba" => Some(&include_bytes!("../../assets/logos/alibaba.png")[..]),
+        _ => None,
+    };
+
+    let image = gtk::Image::new();
+    let mut loaded = false;
+    if let Some(data) = data {
+        let bytes = gtk::glib::Bytes::from_static(data);
+        if let Ok(texture) = gtk::gdk::Texture::from_bytes(&bytes) {
+            image.set_paintable(Some(&texture));
+            loaded = true;
+        }
+    }
+    if !loaded {
+        image.set_icon_name(Some("application-x-executable-symbolic"));
+    }
+    image.set_pixel_size(20);
+    image.set_valign(gtk::Align::Center);
+    image
 }
 
 fn provider_label(id: &str) -> &'static str {
