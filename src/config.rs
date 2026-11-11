@@ -1,3 +1,10 @@
+//! 配置模型与读写。
+//!
+//! 位置：`$XDG_CONFIG_HOME/stfn/config.toml`（默认 `~/.config/stfn/config.toml`）。
+//! 约定：
+//! - 这里只存非敏感设置，密钥由 `secrets` 模块处理；
+//! - 保存时用 `toml_edit` 读改写，尽量保留注释和字段顺序；
+//! - 原子写：同目录临时文件 + fsync + rename。
 use serde::{Deserialize, Deserializer, Serialize};
 use std::env;
 use std::fs;
@@ -9,6 +16,7 @@ pub const APP_DIR: &str = "stfn";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
+/// 输出语言；Auto 时由输入检测决定中译英或英译中。
 pub enum Target {
     #[default]
     Auto,
@@ -55,6 +63,7 @@ impl Target {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
+/// CLI/配置中的默认翻译源。
 pub enum SourceChoice {
     #[default]
     Bing,
@@ -91,6 +100,7 @@ impl SourceChoice {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+/// 通用行为配置；`debounce_ms` 默认 700ms。
 pub struct GeneralConfig {
     pub auto_translate: bool,
     pub debounce_ms: u64,
@@ -111,6 +121,7 @@ impl Default for GeneralConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
+/// 三家 provider 的启用开关；区域由后端固定，不写入配置。
 pub struct ProvidersConfig {
     pub bing: BingConfig,
     pub volcengine: VolcengineConfig,
@@ -143,6 +154,7 @@ pub struct AlibabaConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+/// 顶层配置。`version` 为未来迁移预留。
 pub struct Config {
     pub version: u32,
     pub general: GeneralConfig,
@@ -160,6 +172,7 @@ impl Default for Config {
 }
 
 impl Config {
+    /// 按 UI 展示顺序返回启用平台 id。
     pub fn enabled_provider_ids(&self) -> Vec<&'static str> {
         let mut ids = Vec::new();
         if self.providers.bing.enabled {
@@ -175,6 +188,7 @@ impl Config {
     }
 }
 
+/// XDG 配置目录；测试通过 XDG_CONFIG_HOME 指向临时目录。
 pub fn config_dir() -> PathBuf {
     if let Some(dir) = env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
         PathBuf::from(dir).join(APP_DIR)
@@ -189,11 +203,13 @@ pub fn config_path() -> PathBuf {
     config_dir().join("config.toml")
 }
 
+/// 加载结果：配置本体 + 非致命 warning，供 CLI/GUI 提示。
 pub struct LoadedConfig {
     pub config: Config,
     pub warnings: Vec<String>,
 }
 
+/// 加载流程：缺失则创建默认；解析失败先备份再用默认值；最后做范围校验。
 pub fn load() -> LoadedConfig {
     let path = config_path();
     let mut warnings = Vec::new();
@@ -228,6 +244,7 @@ pub fn load() -> LoadedConfig {
     LoadedConfig { config, warnings }
 }
 
+// 容错校验：版本和延迟范围；配置错误不应阻塞启动。
 fn validate(config: &mut Config, warnings: &mut Vec<String>) {
     if config.version > 1 {
         warnings.push(format!(
@@ -247,6 +264,7 @@ fn validate(config: &mut Config, warnings: &mut Vec<String>) {
     }
 }
 
+/// 用 toml_edit 更新已知字段，移除历史 tencent/region 字段，然后原子写。
 pub fn save(config: &Config) -> std::io::Result<()> {
     let path = config_path();
     let dir = config_dir();
@@ -290,6 +308,7 @@ pub fn save(config: &Config) -> std::io::Result<()> {
     atomic_write(&path, doc.to_string().as_bytes(), 0o644)
 }
 
+// 确保父表存在；providers 设置为 implicit，避免输出空的 [providers] 头。
 fn ensure_table<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {
     if !doc.as_table().contains_key(key) {
         doc.as_table_mut().insert(key, Item::Table(Table::new()));
@@ -315,6 +334,7 @@ fn backup(path: &Path) {
     let _ = fs::rename(path, backup);
 }
 
+/// 原子写：写临时文件、fsync、rename，再 fsync 父目录。
 pub fn atomic_write(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;

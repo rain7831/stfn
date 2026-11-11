@@ -1,3 +1,7 @@
+//! 翻译领域模型与 provider 抽象。
+//!
+//! `Provider` 只负责一次协议调用；去抖、并发、缓存和 UI 更新都在调用方。
+//! `run_one` 负责单 provider 的超时、一次重试和 latency 统计。
 use std::fmt;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -8,6 +12,7 @@ use lru::LruCache;
 use crate::lang::Lang;
 
 #[derive(Debug, Clone)]
+/// 一次翻译请求：原文 + 已确定的源/目标语言。
 pub struct TranslateRequest {
     pub text: String,
     pub from: Lang,
@@ -15,6 +20,7 @@ pub struct TranslateRequest {
 }
 
 #[derive(Debug, Clone, Default)]
+/// 一个 provider 的成功结果；音标/音频字段为 v1.1 预留。
 pub struct TranslateOutput {
     pub text: String,
     pub detected: Option<Lang>,
@@ -24,6 +30,7 @@ pub struct TranslateOutput {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+/// provider 能力声明，UI 可据此决定是否显示音标/朗读入口。
 pub struct Capabilities {
     pub phonetics: bool,
     pub tts: bool,
@@ -31,6 +38,7 @@ pub struct Capabilities {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 统一错误分类；`retryable` 由分类推导，避免各 provider 自行判断。
 pub enum ProviderErrorKind {
     Auth,
     RateLimit,
@@ -62,6 +70,7 @@ pub struct ProviderError {
     pub retryable: bool,
 }
 
+// 构造器：错误文案面向用户，不包含密钥或请求头。
 impl ProviderError {
     pub fn new(kind: ProviderErrorKind, message: impl Into<String>) -> Self {
         let retryable = matches!(
@@ -111,6 +120,7 @@ impl fmt::Display for ProviderError {
 }
 
 #[async_trait]
+/// 所有翻译源的最小接口。
 pub trait Provider: Send + Sync {
     fn id(&self) -> &'static str;
     fn capabilities(&self) -> Capabilities {
@@ -123,8 +133,10 @@ pub trait Provider: Send + Sync {
         -> Result<TranslateOutput, ProviderError>;
 }
 
+/// provider id + 成功/失败结果；id 用于把异步结果映射回 UI 行。
 pub type ProviderResult = (String, Result<TranslateOutput, ProviderError>);
 
+/// 跑单个 provider：超时保护 + 可重试错误退避一次，并记录总耗时。
 pub async fn run_one(
     provider: std::sync::Arc<dyn Provider>,
     request: TranslateRequest,
@@ -152,6 +164,7 @@ pub async fn run_one(
     }
 }
 
+/// 并发跑多个 provider；`join_all` 保持输入顺序，便于 UI 稳定排序。
 pub async fn run_providers(
     providers: Vec<std::sync::Arc<dyn Provider>>,
     request: TranslateRequest,
@@ -164,6 +177,7 @@ pub async fn run_providers(
     .await
 }
 
+/// 仅内存 LRU 缓存；退出即清空，不落盘翻译内容。
 pub struct TranslateCache {
     inner: Mutex<LruCache<String, TranslateOutput>>,
 }
@@ -177,6 +191,7 @@ impl TranslateCache {
         }
     }
 
+    /// 命中时克隆结果，避免把锁的生命周期带到 UI。
     pub fn get(&self, key: &str) -> Option<TranslateOutput> {
         self.inner.lock().ok()?.get(key).cloned()
     }
@@ -188,6 +203,7 @@ impl TranslateCache {
     }
 }
 
+/// 缓存 key 用 \u{1f} 分隔，避免原文拼接造成碰撞。
 pub fn cache_key(provider: &str, request: &TranslateRequest) -> String {
     format!(
         "{}\u{1f}{}\u{1f}{}\u{1f}{}",

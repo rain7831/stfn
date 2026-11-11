@@ -1,3 +1,7 @@
+//! 阿里云机器翻译通用版 provider（TranslateGeneral / RPC HMAC-SHA1）。
+//!
+//! 区域固定 cn-hangzhou；参数按 key 排序、RFC3986 编码，
+//! 再用 AccessKeySecret + "&" 做 HMAC-SHA1 并 Base64。
 use async_trait::async_trait;
 use base64::Engine;
 use hmac::{Hmac, Mac};
@@ -14,6 +18,7 @@ const ENDPOINT: &str = "https://mt.cn-hangzhou.aliyuncs.com/";
 const VERSION: &str = "2018-10-12";
 const REGION: &str = "cn-hangzhou";
 
+/// 阿里云 provider：凭据、固定 endpoint。
 pub struct Alibaba {
     client: reqwest::Client,
     access_key_id: String,
@@ -21,7 +26,9 @@ pub struct Alibaba {
     endpoint: String,
 }
 
+// 阿里云私有实现：RPC 签名。
 impl Alibaba {
+    /// 允许 STFN_ALI_BASE_URL 覆盖，区域固定 cn-hangzhou。
     pub fn new(client: reqwest::Client, access_key_id: String, access_key_secret: String) -> Self {
         let endpoint = std::env::var("STFN_ALI_BASE_URL").unwrap_or_else(|_| ENDPOINT.to_string());
         Self {
@@ -32,6 +39,7 @@ impl Alibaba {
         }
     }
 
+    /// 对所有参数排序编码，计算 StringToSign = POST&%2F&<query> 的 HMAC-SHA1。
     fn sign(&self, params: &[(String, String)]) -> Result<String, ProviderError> {
         let mut sorted = params.to_vec();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
@@ -52,6 +60,7 @@ impl Alibaba {
 }
 
 #[async_trait]
+// Provider 实现：POST form；响应兼容 flat 与 TranslateGeneralResponse 包裹层。
 impl Provider for Alibaba {
     fn id(&self) -> &'static str {
         "alibaba"
@@ -65,6 +74,7 @@ impl Provider for Alibaba {
         }
     }
 
+    /// 组装公共参数 + TranslateGeneral 业务参数，签名后发送。
     async fn translate(
         &self,
         request: &TranslateRequest,
@@ -150,6 +160,7 @@ impl Provider for Alibaba {
     }
 }
 
+// 提取 Code/Message/Data，兼容两种响应包裹形式。
 fn extract_response(value: &serde_json::Value) -> (i64, String, Option<&serde_json::Value>) {
     let root = value.get("TranslateGeneralResponse").unwrap_or(value);
     let code = root
@@ -168,6 +179,7 @@ fn extract_response(value: &serde_json::Value) -> (i64, String, Option<&serde_js
     (code, message, root.get("Data"))
 }
 
+// 阿里云 RPC 错误码 -> 统一错误分类。
 fn ali_error(code: i64, message: &str) -> ProviderError {
     let message = if message.is_empty() {
         "阿里云返回错误".to_string()
@@ -183,6 +195,7 @@ fn ali_error(code: i64, message: &str) -> ProviderError {
     }
 }
 
+// RFC3986 编码；空格/星号/波浪号按阿里云要求处理。
 fn percent_encode(value: &str) -> String {
     let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
     encoded
@@ -191,6 +204,7 @@ fn percent_encode(value: &str) -> String {
         .replace("%7E", "~")
 }
 
+// HTTP 状态 -> 统一错误分类。
 fn status_error(status: reqwest::StatusCode) -> ProviderError {
     match status.as_u16() {
         401 | 403 => ProviderError::auth("阿里云认证失败，请检查 AccessKey"),
@@ -200,6 +214,7 @@ fn status_error(status: reqwest::StatusCode) -> ProviderError {
     }
 }
 
+// 网络错误统一映射，超时单独分类以便重试。
 fn map_reqwest_error(error: reqwest::Error) -> ProviderError {
     if error.is_timeout() {
         ProviderError::timeout()

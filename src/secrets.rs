@@ -1,3 +1,7 @@
+//! 密钥读取、写入和删除。
+//!
+//! 优先级：环境变量 > Secret Service（keyring）> `credentials.toml`（0600）。
+//! 设计原则：密钥不进入 config.toml；UI 只显示 `******`；写 keyring 失败不静默降级。
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use std::env;
@@ -10,24 +14,28 @@ use crate::config::{atomic_write, config_dir};
 const SERVICE: &str = "stfn";
 
 #[derive(Debug, Clone, Default)]
+/// 内存中的云厂商密钥；使用 SecretString 避免意外 Debug/日志输出。
 pub struct Credentials {
     pub volcengine: VolcCredentials,
     pub alibaba: AlibabaCredentials,
 }
 
 #[derive(Debug, Clone, Default)]
+// 火山引擎凭据：Access Key / Secret Key。
 pub struct VolcCredentials {
     pub access_key: Option<SecretString>,
     pub secret_key: Option<SecretString>,
 }
 
 #[derive(Debug, Clone, Default)]
+// 阿里云凭据：AccessKey ID / AccessKey Secret。
 pub struct AlibabaCredentials {
     pub access_key_id: Option<SecretString>,
     pub access_key_secret: Option<SecretString>,
 }
 
 impl Credentials {
+    /// 两个字段都齐全时返回 (access_key, secret_key)，否则 None。
     pub fn volcengine_pair(&self) -> Option<(String, String)> {
         Some((
             self.volcengine
@@ -43,6 +51,7 @@ impl Credentials {
         ))
     }
 
+    /// 两个字段都齐全时返回 (access_key_id, access_key_secret)。
     pub fn alibaba_pair(&self) -> Option<(String, String)> {
         Some((
             self.alibaba
@@ -60,15 +69,18 @@ impl Credentials {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 密钥实际保存位置，用于 UI 提示。
 pub enum Stored {
     Keyring,
     File,
 }
 
+/// 一次性探测 Secret Service 是否可用；keyring crate 底层走 zbus。
 pub fn keyring_available() -> bool {
     keyring::Entry::store_status().is_ok()
 }
 
+/// 字段名 -> 环境变量名；未知字段返回 None。
 pub fn env_var_for(field: &str) -> Option<&'static str> {
     match field {
         "volcengine.access_key" => Some("STFN_VOLC_ACCESS_KEY"),
@@ -85,6 +97,7 @@ pub fn env_is_set(field: &str) -> bool {
         .is_some_and(|v| !v.is_empty())
 }
 
+// 空字符串视为未设置，避免把空值覆盖到有效凭据。
 fn env_secret(field: &str) -> Option<SecretString> {
     let name = env_var_for(field)?;
     env::var(name)
@@ -93,6 +106,7 @@ fn env_secret(field: &str) -> Option<SecretString> {
         .map(SecretString::from)
 }
 
+/// 按 env -> keyring -> file 的优先级填充每个字段。
 pub fn load() -> (Credentials, Vec<String>) {
     let mut warnings = Vec::new();
     let keyring_ok = keyring_available();
@@ -131,6 +145,7 @@ pub fn load() -> (Credentials, Vec<String>) {
     (credentials, warnings)
 }
 
+// 单字段优先级：环境变量 > keyring > 回退文件。
 fn load_field(
     slot: &mut Option<SecretString>,
     field: &str,
@@ -152,11 +167,13 @@ fn load_field(
     }
 }
 
+// 从 keyring 读取；条目不存在或读取失败都返回 None。
 fn keyring_get(field: &str) -> Option<SecretString> {
     let entry = keyring::Entry::new(SERVICE, field).ok()?;
     entry.get_password().ok().map(SecretString::from)
 }
 
+/// 写入密钥：环境变量字段拒绝修改；keyring 可用时必须写成功，否则写 0600 文件。
 pub fn store_secret(field: &str, value: &str) -> Result<Stored, String> {
     if env_is_set(field) {
         return Err(format!(
@@ -181,6 +198,7 @@ pub fn store_secret(field: &str, value: &str) -> Result<Stored, String> {
     Ok(Stored::File)
 }
 
+/// 删除密钥：同时清理 keyring 条目和回退文件字段；环境变量字段拒绝。
 pub fn delete_secret(field: &str) -> Result<(), String> {
     if env_is_set(field) {
         return Err(format!(
@@ -210,10 +228,12 @@ pub fn delete_secret(field: &str) -> Result<(), String> {
     atomic_write(&path, doc.to_string().as_bytes(), 0o600).map_err(|e| e.to_string())
 }
 
+/// 回退凭据文件路径。
 pub fn credentials_path() -> PathBuf {
     config_dir().join("credentials.toml")
 }
 
+// 回退文件写入：目录 0700、文件 0600，使用 toml_edit 保留其他字段。
 fn save_file_secret(field: &str, secret: &str) -> Result<(), String> {
     let (provider, key) = split_field(field)?;
     let path = credentials_path();
@@ -250,6 +270,7 @@ fn save_file_secret(field: &str, secret: &str) -> Result<(), String> {
     atomic_write(&path, doc.to_string().as_bytes(), 0o600).map_err(|e| e.to_string())
 }
 
+// 把 `provider.key` 拆成 (provider, key)。
 fn split_field(field: &str) -> Result<(&str, &str), String> {
     let (provider, key) = field
         .split_once('.')
@@ -258,6 +279,7 @@ fn split_field(field: &str) -> Result<(&str, &str), String> {
 }
 
 #[derive(Debug, Default, Deserialize)]
+// 回退文件的反序列化结构；不实现 Serialize，写入由 toml_edit 完成。
 struct FileCredentials {
     #[serde(default)]
     providers: FileProviders,
@@ -283,6 +305,7 @@ struct FileAlibaba {
     access_key_secret: Option<String>,
 }
 
+// 读取回退文件；权限过宽时尝试收紧为 0600，解析失败只警告不阻塞启动。
 fn load_file(warnings: &mut Vec<String>) -> FileCredentials {
     let path = credentials_path();
     if !path.exists() {

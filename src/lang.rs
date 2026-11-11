@@ -1,9 +1,18 @@
+//! 纯本地语言检测，不访问网络。
+//!
+//! v0.1 只服务中英互译：
+//! - 含 CJK 统一表意文字 -> 中文；
+//! - 含 ASCII 字母 -> 英文；
+//! - 含日文假名 / 韩文 -> 暂不支持；
+//! - 纯数字 / 符号 -> 空输入。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 当前支持的翻译语言。
 pub enum Lang {
     Zh,
     En,
 }
 
+// 语言代码：API 使用 code/bing_code，UI 使用 label。
 impl Lang {
     pub fn code(self) -> &'static str {
         match self {
@@ -26,6 +35,7 @@ impl Lang {
         }
     }
 
+    /// 把 provider 返回的语言代码归一化；未知语言返回 None。
     pub fn from_code(code: &str) -> Option<Self> {
         let code = code.to_ascii_lowercase();
         if code == "zh" || code.starts_with("zh-") {
@@ -39,6 +49,7 @@ impl Lang {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 输入语言检测结果。Unsupported 用于日文/韩文/其他字母文字。
 pub enum Detection {
     Empty,
     Zh,
@@ -46,6 +57,7 @@ pub enum Detection {
     Unsupported,
 }
 
+/// 扫描字符类别判断语言；混排中英按中文处理，避免引入额外语言检测依赖。
 pub fn detect(text: &str) -> Detection {
     let text = text.trim();
     if text.is_empty() {
@@ -87,6 +99,7 @@ pub fn detect(text: &str) -> Detection {
     }
 }
 
+// CJK 统一表意文字及扩展区。
 fn is_cjk(cp: u32) -> bool {
     (0x4E00..=0x9FFF).contains(&cp)
         || (0x3400..=0x4DBF).contains(&cp)

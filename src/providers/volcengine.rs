@@ -1,3 +1,7 @@
+//! 火山引擎机器翻译 provider（TranslateText / Signature V4）。
+//!
+//! 区域固定为 cn-north-1，不在 UI 暴露；签名使用 HMAC-SHA256 派生
+//! kDate -> kRegion -> kService -> kSigning。
 use async_trait::async_trait;
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
@@ -14,6 +18,7 @@ const SERVICE: &str = "translate";
 const ACTION: &str = "TranslateText";
 const VERSION: &str = "2020-06-01";
 
+/// 火山 provider：凭据、固定区域和 HTTP client。
 pub struct Volcengine {
     client: reqwest::Client,
     access_key: String,
@@ -23,7 +28,9 @@ pub struct Volcengine {
     host: String,
 }
 
+// 火山私有实现：Signature V4 签名。
 impl Volcengine {
+    /// 允许 STFN_VOLC_BASE_URL 覆盖，区域固定 cn-north-1。
     pub fn new(client: reqwest::Client, access_key: String, secret_key: String) -> Self {
         let base_url = std::env::var("STFN_VOLC_BASE_URL").unwrap_or_else(|_| BASE_URL.to_string());
         let host = reqwest::Url::parse(&base_url)
@@ -40,6 +47,7 @@ impl Volcengine {
         }
     }
 
+    /// 构造 canonical request / string to sign / signing key，返回 Authorization 与时间头。
     fn sign(&self, body: &str) -> Result<(String, String, String), ProviderError> {
         let now = time::OffsetDateTime::now_utc();
         let x_date = now
@@ -80,6 +88,7 @@ impl Volcengine {
 }
 
 #[async_trait]
+// Provider 实现：请求体字段是 TextList，响应读取 DetectedSourceLanguage。
 impl Provider for Volcengine {
     fn id(&self) -> &'static str {
         "volcengine"
@@ -93,6 +102,7 @@ impl Provider for Volcengine {
         }
     }
 
+    /// 发送 TranslateText；响应为空时从 ResponseMetadata.Error 提取原因。
     async fn translate(
         &self,
         request: &TranslateRequest,
@@ -145,6 +155,7 @@ impl Provider for Volcengine {
     }
 }
 
+// HMAC-SHA256 小工具。
 fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key size");
     mac.update(data);
@@ -152,6 +163,7 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
 }
 
 #[derive(Debug, Deserialize)]
+// 火山响应：TranslationList 与通用元数据。
 struct VolcResponse {
     #[serde(rename = "TranslationList")]
     translation_list: Option<Vec<VolcItem>>,
@@ -160,6 +172,7 @@ struct VolcResponse {
 }
 
 #[derive(Debug, Deserialize)]
+// 单条翻译结果。
 struct VolcItem {
     #[serde(rename = "Translation")]
     translation: Option<String>,
@@ -167,6 +180,7 @@ struct VolcItem {
     detected_language: Option<String>,
 }
 
+// 把火山错误码/消息映射为统一错误分类。
 fn volc_error(metadata: Option<&serde_json::Value>) -> ProviderError {
     let error = metadata.and_then(|m| m.get("Error"));
     let code = error
@@ -187,6 +201,7 @@ fn volc_error(metadata: Option<&serde_json::Value>) -> ProviderError {
     }
 }
 
+// HTTP 状态 -> 统一错误分类。
 fn status_error(status: reqwest::StatusCode) -> ProviderError {
     match status.as_u16() {
         401 | 403 => ProviderError::auth("火山引擎认证失败，请检查密钥"),
@@ -196,6 +211,7 @@ fn status_error(status: reqwest::StatusCode) -> ProviderError {
     }
 }
 
+// 网络错误统一映射，超时单独分类以便重试。
 fn map_reqwest_error(error: reqwest::Error) -> ProviderError {
     if error.is_timeout() {
         ProviderError::timeout()

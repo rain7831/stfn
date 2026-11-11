@@ -1,7 +1,12 @@
+//! CLI 端到端测试。
+//!
+//! 所有测试通过 XDG_CONFIG_HOME 使用临时配置目录，避免污染真实用户配置；
+//! 网络请求用 httpmock 拦截，验证 CLI 参数、provider 协议和输出格式。
 use assert_cmd::Command;
 use httpmock::prelude::*;
 use predicates::prelude::*;
 
+// 构造 Bing 网页会话 HTML + ttranslatev3 响应；extra 用于测试第二个数组元素。
 fn mock_bing(server: &MockServer, translated: &str, extra: &str) {
     server.mock(|when, then| {
         when.method(GET).path("/translator");
@@ -19,6 +24,7 @@ fn mock_bing(server: &MockServer, translated: &str, extra: &str) {
     });
 }
 
+// 统一测试命令：注入 mock Bing base URL 和临时配置目录。
 fn cmd(server: &MockServer, dir: &std::path::Path) -> Command {
     let mut command = Command::cargo_bin("stfn").unwrap();
     command
@@ -28,6 +34,7 @@ fn cmd(server: &MockServer, dir: &std::path::Path) -> Command {
 }
 
 #[test]
+// en -> zh 的基本路径。
 fn translates_english_to_chinese() {
     let server = MockServer::start();
     mock_bing(&server, "你好", "");
@@ -41,6 +48,7 @@ fn translates_english_to_chinese() {
 }
 
 #[test]
+// zh -> en 时 Bing 会多返回一个 transliteration 元素，解析应跳过。
 fn translates_chinese_to_english_with_extra_array_item() {
     let server = MockServer::start();
     mock_bing(&server, "Hello", r#",{"inputTransliteration":"Nǐ hǎo"}"#);
@@ -54,6 +62,7 @@ fn translates_chinese_to_english_with_extra_array_item() {
 }
 
 #[test]
+// 校验 --json 的稳定字段。
 fn json_output_is_stable() {
     let server = MockServer::start();
     mock_bing(&server, "你好", "");
@@ -73,6 +82,7 @@ fn json_output_is_stable() {
 }
 
 #[test]
+// --notify 与 --json 互斥。
 fn notify_and_json_conflict() {
     let server = MockServer::start();
     let temp = tempfile::tempdir().unwrap();
@@ -85,6 +95,7 @@ fn notify_and_json_conflict() {
 }
 
 #[test]
+// 空输入应返回用法错误。
 fn empty_input_is_usage_error() {
     let server = MockServer::start();
     let temp = tempfile::tempdir().unwrap();
@@ -93,6 +104,7 @@ fn empty_input_is_usage_error() {
 }
 
 #[test]
+// 日文等非中英输入应明确拒绝。
 fn unsupported_language_is_usage_error() {
     let server = MockServer::start();
     let temp = tempfile::tempdir().unwrap();
@@ -105,6 +117,7 @@ fn unsupported_language_is_usage_error() {
 }
 
 #[test]
+// 显式 `-` 才读取 stdin，避免管道误触发。
 fn stdin_input_works() {
     let server = MockServer::start();
     mock_bing(&server, "你好", "");
@@ -119,6 +132,7 @@ fn stdin_input_works() {
 }
 
 #[test]
+// --source all 在只启用 Bing 时仍可工作。
 fn source_all_uses_bing_when_only_bing_enabled() {
     let server = MockServer::start();
     mock_bing(&server, "你好", "");
@@ -132,6 +146,7 @@ fn source_all_uses_bing_when_only_bing_enabled() {
 }
 
 #[test]
+// v0.1 中朗读明确返回 v1.1 提示。
 fn speak_is_v11() {
     let server = MockServer::start();
     let temp = tempfile::tempdir().unwrap();
@@ -144,6 +159,7 @@ fn speak_is_v11() {
 }
 
 #[test]
+// 阿里云请求参数/签名返回 + JSON 解析。
 fn alibaba_translates_with_mock() {
     let server = MockServer::start();
     server.mock(|when, then| {
@@ -179,6 +195,7 @@ fn alibaba_translates_with_mock() {
 }
 
 #[test]
+// 火山必须使用 TextList，并正确读取 DetectedSourceLanguage。
 fn volcengine_uses_textlist_and_parses_detected_source() {
     let server = MockServer::start();
     server.mock(|when, then| {

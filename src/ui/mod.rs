@@ -1,3 +1,11 @@
+//! GTK4 / libadwaita 界面。
+//!
+//! 主窗口是一个 `AdwNavigationView`：主页面 + 应用内设置页。
+//! 线程模型：
+//! - GTK 主线程只做 UI；
+//! - tokio runtime 在后台执行 provider 请求；
+//! - 结果经 async_channel 回到 glib 主循环；
+//! - generation 过滤过期输入，避免旧结果覆盖新输入。
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -12,8 +20,10 @@ use crate::providers;
 use crate::secrets::{self, Credentials};
 use crate::translate::{self, ProviderError, TranslateCache, TranslateOutput, TranslateRequest};
 
+// 已保存密钥的占位符；密码框显示为圆点，保存时据此判断“未修改”。
 const SENTINEL: &str = "******";
 
+/// 后台 provider 结果回到 UI 线程的事件。
 enum UiEvent {
     Result {
         generation: u64,
@@ -22,6 +32,7 @@ enum UiEvent {
     },
 }
 
+/// 单个平台结果卡片：持有控件和当前译文，更新时只改内容不重建行。
 struct ProviderRow {
     id: &'static str,
     root: gtk::Box,
@@ -34,7 +45,9 @@ struct ProviderRow {
     text: Rc<RefCell<String>>,
 }
 
+// 结果卡片构建与状态切换（loading/result/error/clear）。
 impl ProviderRow {
+    /// 构建卡片；retry 回调由外层注入，复制按钮自带 1.2s 勾选反馈。
     fn new(id: &'static str, on_retry: Rc<dyn Fn()>) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
         root.add_css_class("card");
@@ -136,6 +149,7 @@ impl ProviderRow {
         }
     }
 
+    /// 加载态：保留旧译文并降低透明度，避免闪烁。
     fn set_loading(&self) {
         self.spinner.set_visible(true);
         self.spinner.start();
@@ -147,6 +161,7 @@ impl ProviderRow {
         self.body.set_opacity(0.6);
     }
 
+    /// 成功态：写入译文、显示复制按钮，音标/播放有数据才显示。
     fn set_result(&self, output: &TranslateOutput) {
         self.spinner.stop();
         self.spinner.set_visible(false);
@@ -164,6 +179,7 @@ impl ProviderRow {
         }
     }
 
+    /// 失败态：显示脱敏错误并露出重试按钮。
     fn set_error(&self, error: &ProviderError) {
         self.spinner.stop();
         self.spinner.set_visible(false);
@@ -173,6 +189,7 @@ impl ProviderRow {
         self.body.set_opacity(0.6);
     }
 
+    /// 清空输入时重置卡片。
     fn clear(&self) {
         self.spinner.stop();
         self.spinner.set_visible(false);
@@ -187,6 +204,7 @@ impl ProviderRow {
 }
 
 #[derive(Clone)]
+/// 密钥字段的保存动作：保留、删除、替换。
 enum KeyAction {
     Keep,
     Delete,
@@ -194,6 +212,7 @@ enum KeyAction {
 }
 
 #[derive(Clone)]
+/// 单个密钥输入行；记录是否原本已有密钥，以及是否来自环境变量。
 struct KeyField {
     row: adw::PasswordEntryRow,
     field: &'static str,
@@ -201,7 +220,9 @@ struct KeyField {
     env: bool,
 }
 
+// 密钥输入状态机：sentinel 表示已保存，空字符串表示删除。
 impl KeyField {
+    /// 初始化输入行：env 只读；已有密钥显示 sentinel；聚焦时全选便于替换。
     fn new(title: &str, field: &'static str, had_key: bool, dirty: &Rc<Cell<bool>>) -> Self {
         let row = adw::PasswordEntryRow::new();
         let env = secrets::env_is_set(field);
@@ -265,6 +286,7 @@ impl KeyField {
         }
     }
 
+    /// 根据当前输入决定保存动作；容忍用户在 sentinel 后追加内容。
     fn action(&self) -> KeyAction {
         if self.env {
             return KeyAction::Keep;
@@ -285,6 +307,7 @@ impl KeyField {
         }
     }
 
+    /// 厂商开启时，判断该字段是否已有或本次填写了有效密钥。
     fn satisfied(&self) -> bool {
         if self.env {
             return true;
@@ -296,11 +319,13 @@ impl KeyField {
         }
     }
 
+    /// 本次是否输入了新密钥（用于判断是否需要本地文件回退授权）。
     fn is_new(&self) -> bool {
         matches!(self.action(), KeyAction::Set(_))
     }
 }
 
+/// UI 状态与后台 runtime 的桥接；所有控件和配置都集中在主线程。
 struct UiState {
     window: adw::ApplicationWindow,
     nav: adw::NavigationView,
@@ -325,7 +350,9 @@ struct UiState {
     settings_save: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
+// 主窗口生命周期、翻译编排、设置页导航。
 impl UiState {
+    /// 初始化配置/密钥、主页面、输入区、结果区和后台 runtime。
     fn new(app: &adw::Application) -> Rc<Self> {
         install_css();
         let loaded = config::load();
@@ -344,6 +371,7 @@ impl UiState {
         let window_for_map = window.clone();
         window.connect_map(move |_| apply_app_id(&window_for_map));
 
+        // 顶栏：标题 + 设置入口；设置页复用同一个窗口。
         let header = adw::HeaderBar::new();
         let title = gtk::Label::new(Some("STFN"));
         title.add_css_class("heading");
@@ -352,6 +380,7 @@ impl UiState {
         settings_button.set_tooltip_text(Some("设置 (Ctrl+,)"));
         header.pack_end(&settings_button);
 
+        // 输入区：GtkTextView 保证多行文字从左上角开始，而不是垂直居中。
         let input = gtk::TextView::new();
         input.set_hexpand(true);
         input.set_vexpand(true);
@@ -384,6 +413,7 @@ impl UiState {
         translate_button.add_css_class("suggested-action");
         translate_button.set_visible(false);
 
+        // 区块标题 + 方向/手动翻译按钮；输入卡片在标题下方留 10px。
         let input_title = gtk::Label::new(Some("输入中文或英文，自动翻译"));
         set_label_font(&input_title, 15, true);
         input_title.set_xalign(0.0);
@@ -396,6 +426,7 @@ impl UiState {
         input_header.append(&translate_button);
 
         input_scrolled.set_vexpand(false);
+        // 输入卡片：只包含文本区，方向/按钮已经在标题行。
         let input_card = gtk::Box::new(gtk::Orientation::Vertical, 0);
         input_card.set_vexpand(false);
         input_card.add_css_class("card");
@@ -423,12 +454,14 @@ impl UiState {
         set_label_font(&results_title, 15, true);
         results_title.set_xalign(0.0);
 
+        // 结果区：每个 provider 一张卡片，按内容高度展示，底部留白。
         let results_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
 
         let results_section = gtk::Box::new(gtk::Orientation::Vertical, 10);
         results_section.append(&results_title);
         results_section.append(&results_box);
 
+        // 主内容：输入区 -> 分割线 -> 翻译结果；最大宽度 640px 防止宽屏拉长。
         let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
         content.set_vexpand(true);
         content.set_margin_top(24);
@@ -456,6 +489,7 @@ impl UiState {
         nav.push(&main_page);
         window.set_content(Some(&nav));
 
+        // 后台 runtime 与 UI 事件通道：provider 请求在线程池里跑，结果回主线程。
         let (event_tx, event_rx) = async_channel::unbounded();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(12))
@@ -498,6 +532,7 @@ impl UiState {
         state
     }
 
+    /// 连接输入、按钮、快捷键、关闭确认和后台结果通道。
     fn attach(self: &Rc<Self>) {
         let state = self.clone();
         self.input.buffer().connect_changed(move |_| {
@@ -514,6 +549,7 @@ impl UiState {
             state.translate_now();
         });
 
+        // 快捷键在捕获阶段处理：设置页 Ctrl+S/Esc 优先于输入控件。
         let key_controller = gtk::EventControllerKey::new();
         key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
         let state = self.clone();
@@ -558,6 +594,7 @@ impl UiState {
         self.window.add_controller(key_controller);
 
         let state = self.clone();
+        // 关闭窗口时若设置页有未保存修改，先弹确认。
         self.window.connect_close_request(move |window| {
             if state.settings_page.borrow().is_some() && state.settings_dirty.get() {
                 let state = state.clone();
@@ -587,6 +624,7 @@ impl UiState {
             }
         });
 
+        // async_channel -> glib 主循环；UI 只在这里更新控件。
         if let Some(rx) = self.event_rx.borrow_mut().take() {
             let state = self.clone();
             glib::spawn_future_local(async move {
@@ -597,6 +635,7 @@ impl UiState {
         }
     }
 
+    /// 输入变化：更新方向 badge，空/不支持时清空；自动翻译开启时重置去抖。
     fn on_input_changed(self: &Rc<Self>) {
         let text = text_view_text(&self.input);
         let detection = lang::detect(&text);
@@ -623,6 +662,7 @@ impl UiState {
         }
     }
 
+    /// 根据本地检测和强制 target 更新 EN/中 方向提示。
     fn update_direction(&self, detection: Detection) {
         let from = match detection {
             Detection::Zh => Some(Lang::Zh),
@@ -639,6 +679,7 @@ impl UiState {
         }
     }
 
+    /// 重置 debounce 计时器；只有最后一次输入会触发翻译。
     fn schedule_debounce(self: &Rc<Self>) {
         self.cancel_debounce();
         let delay = self.config.borrow().general.debounce_ms;
@@ -651,12 +692,14 @@ impl UiState {
         *self.debounce.borrow_mut() = Some(source);
     }
 
+    /// 取消尚未触发的 debounce。
     fn cancel_debounce(&self) {
         if let Some(source) = self.debounce.borrow_mut().take() {
             source.remove();
         }
     }
 
+    /// 翻译入口：检测方向、选源、generation++、构建 provider，再按平台并发请求。
     fn translate_now(self: &Rc<Self>) {
         self.cancel_debounce();
         let text = text_view_text(&self.input).trim().to_string();
@@ -698,6 +741,7 @@ impl UiState {
         let generation = self.generation.get() + 1;
         self.generation.set(generation);
 
+        // 先构造 provider；缺凭据的平台直接转成该行的错误状态。
         let built = providers::build_providers(
             &ids,
             &self.config.borrow(),
@@ -727,6 +771,7 @@ impl UiState {
 
                     let tx = self.event_tx.clone();
                     let cache = self.cache.clone();
+                    // 每个 provider 独立任务；结果带 generation，旧结果会被 UI 丢弃。
                     self.runtime.spawn(async move {
                         let (_, result) = translate::run_one(provider, request).await;
                         if let Ok(output) = &result {
@@ -746,6 +791,7 @@ impl UiState {
         }
     }
 
+    /// 只在 provider 集合变化时重建卡片，避免每次输入闪烁。
     fn ensure_rows(self: &Rc<Self>, ids: &[&'static str]) {
         let current: Vec<&'static str> = self.rows.borrow().iter().map(|row| row.id).collect();
         if current.as_slice() == ids {
@@ -765,11 +811,13 @@ impl UiState {
         }
     }
 
+    /// 设置保存后按新配置重建结果行。
     fn rebuild_rows(self: &Rc<Self>) {
         let ids = self.config.borrow().enabled_provider_ids();
         self.ensure_rows(&ids);
     }
 
+    /// 校验 generation 后，把结果写到对应平台卡片。
     fn apply_result(
         &self,
         generation: u64,
@@ -788,6 +836,7 @@ impl UiState {
         }
     }
 
+    /// 后台结果事件入口。
     fn handle_event(&self, event: UiEvent) {
         match event {
             UiEvent::Result {
@@ -798,26 +847,31 @@ impl UiState {
         }
     }
 
+    /// 清空所有平台卡片内容。
     fn clear_results(&self) {
         for row in self.rows.borrow().iter() {
             row.clear();
         }
     }
 
+    /// 全局错误/提示（例如未启用翻译源）。
     fn show_status(&self, message: &str) {
         self.status.set_text(message);
         self.status.set_visible(true);
     }
 
+    /// 隐藏全局提示。
     fn hide_status(&self) {
         self.status.set_visible(false);
     }
 
+    /// 自动翻译关闭时显示“翻译”按钮。
     fn update_auto_ui(&self) {
         self.translate_button
             .set_visible(!self.config.borrow().general.auto_translate);
     }
 
+    /// 设置保存后重新加载配置/密钥，刷新 provider 卡片和延迟行为。
     fn reload(self: &Rc<Self>) {
         let loaded = config::load();
         *self.config.borrow_mut() = loaded.config;
@@ -830,6 +884,7 @@ impl UiState {
         self.update_auto_ui();
     }
 
+    /// 打开设置页：push 到 NavigationView，不创建浮动窗口。
     fn open_settings(self: &Rc<Self>) {
         if self.settings_page.borrow().is_some() {
             return;
@@ -842,6 +897,7 @@ impl UiState {
         self.nav.push(&page);
     }
 
+    /// 返回主页面并清理 settings_save 回调。
     fn close_settings(&self) {
         if self.settings_page.borrow_mut().take().is_some() {
             self.nav.pop();
@@ -850,6 +906,7 @@ impl UiState {
         self.settings_dirty.set(false);
     }
 
+    /// 返回/关闭设置页；dirty 时先确认。
     fn request_close_settings(self: &Rc<Self>) {
         if !self.settings_dirty.get() {
             self.close_settings();
@@ -863,6 +920,7 @@ impl UiState {
         });
     }
 
+    /// 快捷键 Ctrl+S 调用当前设置页保存回调（先克隆 Rc，避免 RefCell 重入）。
     fn save_settings(&self) {
         let save = self.settings_save.borrow().clone();
         if let Some(save) = save {
@@ -871,6 +929,7 @@ impl UiState {
     }
 }
 
+/// 构建应用内设置页：通用设置、provider expander、密钥行、保存/脏状态。
 fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
     state.settings_dirty.set(false);
     let dirty = state.settings_dirty.clone();
@@ -891,6 +950,7 @@ fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
 
     let page = adw::PreferencesPage::new();
 
+    // 通用设置：自动翻译 + 延迟。
     let general_group = adw::PreferencesGroup::new();
     general_group.set_title("翻译");
 
@@ -908,6 +968,7 @@ fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
     general_group.add(&spin);
     page.add(&general_group);
 
+    // 翻译源：Bing 开关；火山/阿里用 ExpanderRow 把密钥收在厂商开关下面。
     let providers_group = adw::PreferencesGroup::new();
     providers_group.set_title("翻译源");
     providers_group.set_description(Some("显示 ****** 表示密钥已保存；留空并保存表示删除"));
@@ -920,6 +981,7 @@ fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
     providers_group.add(&bing);
 
     let credentials = state.credentials.borrow();
+    // 密钥行：已有值显示 sentinel；环境变量字段只读。
     let volc_ak = KeyField::new(
         "Access Key",
         "volcengine.access_key",
@@ -1041,11 +1103,13 @@ fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
         allow.connect_active_notify(move |_| dirty_for_allow.set(true));
     }
 
+    // 返回按钮：有未保存修改时由 UiState 弹确认。
     let state_for_back = state.clone();
     back.connect_clicked(move |_| state_for_back.request_close_settings());
 
     let state_for_save = state.clone();
     let allow_file_for_save = allow_file.clone();
+    // 保存流程：校验 -> 密钥 keep/delete/replace -> 写 config -> reload -> 返回主页面。
     let save: Rc<dyn Fn()> = Rc::new(move || {
         let mut config = state_for_save.config.borrow().clone();
         config.general.auto_translate = auto.is_active();
@@ -1139,11 +1203,13 @@ fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
     (nav_page, save)
 }
 
+/// 设置页就地错误展示。
 fn show_settings_error(group: &adw::PreferencesGroup, label: &gtk::Label, message: &str) {
     label.set_text(message);
     group.set_visible(true);
 }
 
+/// 放弃未保存修改的确认对话框。
 fn show_discard_dialog<W: IsA<gtk::Window>>(parent: &W, on_discard: impl FnOnce() + 'static) {
     let parent = parent.upcast_ref::<gtk::Window>();
     let dialog = adw::AlertDialog::new(Some("放弃未保存的修改？"), Some("设置尚未保存。"));
@@ -1159,6 +1225,7 @@ fn show_discard_dialog<W: IsA<gtk::Window>>(parent: &W, on_discard: impl FnOnce(
     });
 }
 
+/// 把 Wayland app-id 固定为 stfn，供 niri 的 app-id 规则匹配。
 fn apply_app_id(window: &adw::ApplicationWindow) {
     if let Some(surface) = window.surface() {
         if let Some(toplevel) = surface.downcast_ref::<gdk4_wayland::WaylandToplevel>() {
@@ -1167,6 +1234,7 @@ fn apply_app_id(window: &adw::ApplicationWindow) {
     }
 }
 
+/// 读取 GtkTextView 全文；缓冲区 start/end iter 用于取整个 buffer。
 fn text_view_text(view: &gtk::TextView) -> String {
     let buffer = view.buffer();
     buffer
@@ -1174,6 +1242,7 @@ fn text_view_text(view: &gtk::TextView) -> String {
         .to_string()
 }
 
+/// 给 GtkTextView 设置 16px 字号和透明背景，避免和结果字号不一致。
 fn install_css() {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(
@@ -1189,6 +1258,7 @@ fn install_css() {
     }
 }
 
+/// 用 Pango 属性统一标签字号/粗细，避免依赖零散 CSS class。
 fn set_label_font(label: &gtk::Label, size: i32, bold: bool) {
     let attrs = gtk::pango::AttrList::new();
     attrs.insert(gtk::pango::AttrSize::new(size * gtk::pango::SCALE));
@@ -1198,6 +1268,7 @@ fn set_label_font(label: &gtk::Label, size: i32, bold: bool) {
     label.set_attributes(Some(&attrs));
 }
 
+/// 加载内嵌的官方厂商 logo；找不到映射时退回通用图标。
 fn provider_logo(id: &str) -> gtk::Image {
     let data: Option<&'static [u8]> = match id {
         "bing" => Some(&include_bytes!("../../assets/logos/bing.png")[..]),
@@ -1223,6 +1294,7 @@ fn provider_logo(id: &str) -> gtk::Image {
     image
 }
 
+/// provider id -> 中文显示名。
 fn provider_label(id: &str) -> &'static str {
     match id {
         "bing" => "Bing",
@@ -1232,6 +1304,7 @@ fn provider_label(id: &str) -> &'static str {
     }
 }
 
+/// GUI 入口：GApplication 单实例；第二次 `stfn settings` 转发到主实例。
 pub fn run(settings: bool) -> anyhow::Result<()> {
     let app = adw::Application::builder()
         .application_id("dev.stfn.Stfn")
@@ -1241,6 +1314,7 @@ pub fn run(settings: bool) -> anyhow::Result<()> {
     let open_settings = Rc::new(Cell::new(settings));
     {
         let open_settings = open_settings.clone();
+        // 第二次启动时 GApplication 把命令行转发到主实例。
         app.connect_command_line(move |app, cmdline| {
             if cmdline
                 .arguments()
@@ -1258,6 +1332,7 @@ pub fn run(settings: bool) -> anyhow::Result<()> {
     {
         let state_slot = state_slot.clone();
         let open_settings = open_settings.clone();
+        // 单实例窗口生命周期：已存在则 present，否则创建 UiState。
         app.connect_activate(move |app| {
             let existing = state_slot.borrow().clone();
             if let Some(state) = existing {

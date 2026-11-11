@@ -1,3 +1,6 @@
+//! CLI：参数解析、文本读取、翻译源选择、翻译执行和输出格式。
+//!
+//! 退出码约定：0 至少一个成功；1 运行时失败；2 用法/输入/配置错误。
 use std::io::Read;
 use std::time::Duration;
 
@@ -12,6 +15,7 @@ use crate::translate::{self, ProviderError, TranslateRequest};
 
 #[derive(Parser, Debug)]
 #[command(name = "stfn", version, about = "Simple Translator For Niri")]
+/// clap 参数模型；`text` 为空且无 flag 时进入 GUI。
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -36,18 +40,21 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+/// 子命令：目前只有应用内设置页。
 pub enum Command {
     /// 打开应用内设置页
     Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 参数分派结果：GUI（可带 settings 标记）或一次性 CLI。
 pub enum Mode {
     Gui { settings: bool },
     Cli,
 }
 
 impl Cli {
+    /// 无文本且无 flag -> GUI；settings -> 设置页；其余按 CLI 执行。
     pub fn mode(&self) -> Mode {
         if matches!(self.command, Some(Command::Settings)) {
             return Mode::Gui { settings: true };
@@ -62,6 +69,7 @@ impl Cli {
     }
 }
 
+/// CLI 主流程：校验参数 -> 配置/输入 -> 检测方向 -> 选源 -> 并发翻译 -> 输出。
 pub fn run(cli: Cli) -> i32 {
     if cli.notify && cli.json {
         eprintln!("--notify 与 --json 不能同时使用");
@@ -219,6 +227,7 @@ pub fn run(cli: Cli) -> i32 {
     0
 }
 
+// 文本来源：argv 用空格连接，或唯一参数 `-` 从 stdin 读取。
 fn read_text(cli: &Cli) -> Result<String, String> {
     if cli.text.is_empty() {
         return Err("缺少要翻译的文本".to_string());
@@ -251,6 +260,7 @@ fn read_text(cli: &Cli) -> Result<String, String> {
     Ok(text)
 }
 
+// 目标语言：--to 优先，否则用配置 target；Auto 时由检测结果决定。
 fn resolve_target(cli: &Cli, config: &Config, detection: Detection) -> Result<Lang, String> {
     match cli.to.as_deref() {
         Some("auto") | None => config
@@ -264,6 +274,7 @@ fn resolve_target(cli: &Cli, config: &Config, detection: Detection) -> Result<La
     }
 }
 
+// 翻译源：--source 优先（支持逗号列表/all），否则使用配置默认源。
 fn resolve_sources(cli: &Cli, config: &Config) -> Result<Vec<&'static str>, String> {
     if let Some(source) = cli.source.as_deref() {
         let mut ids = Vec::new();
@@ -300,6 +311,7 @@ fn resolve_sources(cli: &Cli, config: &Config) -> Result<Vec<&'static str>, Stri
     Ok(ids)
 }
 
+// 去重追加，保持配置/参数顺序。
 fn push_unique(ids: &mut Vec<&'static str>, id: &'static str) {
     if !ids.contains(&id) {
         ids.push(id);
@@ -307,6 +319,7 @@ fn push_unique(ids: &mut Vec<&'static str>, id: &'static str) {
 }
 
 #[derive(Serialize)]
+// --json 的稳定输出结构。
 struct JsonOutput {
     input: String,
     source: &'static str,
@@ -316,6 +329,7 @@ struct JsonOutput {
 }
 
 #[derive(Serialize)]
+// 单平台成功结果。
 struct JsonResult {
     provider: String,
     text: String,
@@ -325,12 +339,14 @@ struct JsonResult {
 }
 
 #[derive(Serialize)]
+// 单平台失败结果；message 已脱敏。
 struct JsonError {
     provider: String,
     kind: &'static str,
     message: String,
 }
 
+// 输出 JSON；错误进 errors 数组，不混入 stdout 普通文本。
 fn print_json(
     input: &str,
     from: Lang,
@@ -368,6 +384,7 @@ fn print_json(
     }
 }
 
+// 按字符数截断通知正文，避免按字节切断中文。
 fn truncate(text: &str, max: usize) -> String {
     let mut result: String = text.chars().take(max).collect();
     if text.chars().count() > max {
