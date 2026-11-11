@@ -1,0 +1,50 @@
+[package]
+name = "stfn"
+version = "0.1.0"
+edition = "2021"
+description = "Simple Translator For Niri"
+license = "MIT"
+rust-version = "1.92"
+
+[dependencies]
+adw = { package = "libadwaita", version = "0.9", features = ["v1_9", "gtk_v4_22"] }
+async-trait = "0.1"
+anyhow = "1"
+gtk = { package = "gtk4", version = "0.11", features = ["v4_22"] }
+gdk4-wayland = "0.11"
+
+async-channel = "2"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+hex = "0.4"
+hmac = "0.12"
+keyring = "4"
+lru = "0.16"
+notify-rust = "4"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip", "cookies"] }
+secrecy = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+time = { version = "0.3", features = ["formatting", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+toml = "0.9"
+toml_edit = "0.23"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+httpmock = "0.7"
+predicates = "3"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
