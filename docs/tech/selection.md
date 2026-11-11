@@ -95,7 +95,7 @@ let text = clipboard.read_text_future().await?;
 
 - trim 首尾空白；保留内部换行。
 - 空/纯空白：状态提示“没有读到选中文本，请先选中或复制”。
-- 超过 5000 字符：不翻译，状态提示“选中文本超过 5000 字符”；输入框保留截断后的前 5000 字符供用户编辑。
+- 超过 5000 字符：**直接拒绝**，不填入输入框、不自动翻译；状态提示“选中文本超过 5000 字符”。
 - 去除 NUL 等控制字符（保留 `\n`、`\t`）。
 - 写入 `GtkTextView` buffer；光标置于文末。
 
@@ -131,7 +131,7 @@ let text = clipboard.read_text_future().await?;
 | 应用不设置 primary selection | 读取为空，提示用户先选中/复制 |
 | 选区 owner 退出 | 读取失败/空，提示 |
 | 选区只有 HTML | 视为空，提示 |
-| 文本 > 5000 字符 | 截断显示，不自动翻译，提示 |
+| 文本 > 5000 字符 | 直接拒绝，不填入、不翻译，并提示 |
 | 无 Wayland display | GUI 启动失败，stderr 报错 |
 | 连续按快捷键 | 每个进程/窗口独立，允许打开多个 |
 | 选区包含换行 | 保留内部换行，trim 首尾 |
@@ -161,7 +161,7 @@ let text = clipboard.read_text_future().await?;
 
 - 单元/集成：
   - `GuiIntent` 解析：`stfn` / `stfn settings` / `stfn selection`。
-  - 文本清洗：trim、控制字符、5000 上限、换行保留。
+  - 文本清洗：trim、控制字符、超长直接拒绝、换行保留。
   - 读取抽象：注入 fake primary reader，覆盖空/超时/正常文本。
 - 手工：
   - niri 下在 Firefox、GTK 应用、终端分别选中文本，按 `Mod+Shift+Y`。
@@ -174,7 +174,7 @@ let text = clipboard.read_text_future().await?;
 - [ ] `stfn selection` 新进程打开窗口，不依赖已有实例。
 - [ ] 在 niri 的浏览器/GTK/终端选中英文或中文，按 `Mod+Shift+Y` 自动填入并翻译。
 - [ ] 空选区显示提示，不读取旧剪贴板。
-- [ ] 超过 5000 字符有提示，不自动翻译。
+- [ ] 超过 5000 字符直接拒绝：不填入、不翻译，并提示。
 - [ ] 注入后输入框聚焦，可直接编辑。
 - [ ] 连续触发可打开多个独立窗口；关闭即退出。
 - [ ] 不引入 `wl-clipboard`/`wtype` 运行时依赖。
