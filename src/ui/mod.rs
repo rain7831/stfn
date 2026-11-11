@@ -1328,12 +1328,15 @@ pub fn run(settings: bool) -> anyhow::Result<()> {
         });
     }
 
+    // 单实例槽位：None 表示主窗口尚未构建；Some 表示已有 UiState（窗口和控件树都在里面）。
+    // Rc 用于多个 GTK 信号共享；RefCell 用于在 activate 里延迟写入；Option 表示“还没创建”。
     let state_slot: Rc<RefCell<Option<Rc<UiState>>>> = Rc::new(RefCell::new(None));
     {
         let state_slot = state_slot.clone();
         let open_settings = open_settings.clone();
         // 单实例窗口生命周期：已存在则 present，否则创建 UiState。
         app.connect_activate(move |app| {
+            // 先克隆出 Option<Rc<UiState>>，显式结束 RefCell 借用，避免 present/open_settings 时重入 panic。
             let existing = state_slot.borrow().clone();
             if let Some(state) = existing {
                 state.window.present();
@@ -1346,11 +1349,14 @@ pub fn run(settings: bool) -> anyhow::Result<()> {
                 return;
             }
 
+            // 第一次 activate 才真正构建主页面：
+            // ApplicationWindow / HeaderBar / NavigationView / 输入区 / 结果卡片都在 UiState::new 里。
             let state = UiState::new(app);
             *state_slot.borrow_mut() = Some(state.clone());
             state.window.present();
             apply_app_id(&state.window);
             state.input.grab_focus();
+            // open_settings 只是 pending 意图：主页面构建完成（或已存在）后，再决定是否 push 设置页。
             if open_settings.get() {
                 state.open_settings();
                 open_settings.set(false);
@@ -1358,6 +1364,7 @@ pub fn run(settings: bool) -> anyhow::Result<()> {
         });
     }
 
+    // 进入 GTK 主循环，直到窗口关闭；app.run 返回后整个 GUI 进程结束。
     app.run();
     Ok(())
 }
