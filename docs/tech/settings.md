@@ -37,7 +37,7 @@
 ```
 
 - 使用 `AdwPreferencesPage` + `AdwPreferencesGroup`。
-- 火山 / 阿里使用 `AdwExpanderRow`：18px 厂商 logo + 开关 + 可折叠的密钥行；开关关闭时密钥行不展示。
+- 火山 / 阿里使用 `AdwExpanderRow`：16px 厂商 logo + 开关 + 可折叠的密钥行；开关关闭时密钥行不展示。
 - Bing 无密钥，只保留开关。
 - 不提供区域配置；区域由后端固定（火山 `cn-north-1`，阿里 `cn-hangzhou`）。
 

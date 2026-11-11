@@ -48,7 +48,7 @@ impl ProviderRow {
         header.append(&provider_logo(id));
 
         let name = gtk::Label::new(Some(provider_label(id)));
-        set_label_font(&name, 14, true);
+        set_label_font(&name, 13, true);
         name.set_xalign(0.0);
         header.append(&name);
 
@@ -385,7 +385,7 @@ impl UiState {
         translate_button.set_visible(false);
 
         let input_title = gtk::Label::new(Some("输入中文或英文，自动翻译"));
-        set_label_font(&input_title, 14, false);
+        set_label_font(&input_title, 15, true);
         input_title.set_xalign(0.0);
         let input_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         input_header.append(&input_title);
@@ -1177,8 +1177,8 @@ fn text_view_text(view: &gtk::TextView) -> String {
 fn install_css() {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(
-        "textview.input-text { font-size: 15px; background: transparent; }\n\
-         textview.input-text text { font-size: 15px; }",
+        "textview.input-text { font-size: 16px; background: transparent; }\n\
+         textview.input-text text { font-size: 16px; }",
     );
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(
@@ -1218,7 +1218,7 @@ fn provider_logo(id: &str) -> gtk::Image {
     if !loaded {
         image.set_icon_name(Some("application-x-executable-symbolic"));
     }
-    image.set_pixel_size(18);
+    image.set_pixel_size(16);
     image.set_valign(gtk::Align::Center);
     image
 }
