@@ -13,7 +13,6 @@ use crate::secrets::{self, Credentials};
 use crate::translate::{self, ProviderError, TranslateCache, TranslateOutput, TranslateRequest};
 
 const SENTINEL: &str = "******";
-const ROW_INSET: i32 = 12;
 
 enum UiEvent {
     Result {
@@ -38,12 +37,14 @@ struct ProviderRow {
 impl ProviderRow {
     fn new(id: &'static str, on_retry: Rc<dyn Fn()>) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        root.set_margin_top(12);
-        root.set_margin_bottom(12);
-        root.set_margin_start(ROW_INSET);
-        root.set_margin_end(ROW_INSET);
+        root.add_css_class("card");
+        root.set_vexpand(true);
+        root.set_margin_bottom(10);
 
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        header.set_margin_top(12);
+        header.set_margin_start(12);
+        header.set_margin_end(12);
         header.append(&provider_logo(id));
 
         let name = gtk::Label::new(Some(provider_label(id)));
@@ -85,17 +86,23 @@ impl ProviderRow {
         body.set_selectable(true);
         body.set_xalign(0.0);
         body.set_hexpand(true);
+        body.set_vexpand(true);
+        body.set_valign(gtk::Align::Start);
+        body.set_margin_start(12);
+        body.set_margin_end(12);
+        body.set_margin_bottom(12);
         root.append(&body);
 
         let error = gtk::Label::new(None);
         set_label_font(&error, 12, false);
         error.set_wrap(true);
         error.set_xalign(0.0);
+        error.set_margin_start(12);
+        error.set_margin_end(12);
+        error.set_margin_bottom(10);
         error.add_css_class("error");
         error.set_visible(false);
         root.append(&error);
-
-        root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
         let text = Rc::new(RefCell::new(String::new()));
         let retry_callback = on_retry.clone();
@@ -350,7 +357,6 @@ impl UiState {
         input.set_hexpand(true);
         input.set_vexpand(false);
         input.set_max_length(5000);
-        input.set_placeholder_text(Some("输入中文或英文，自动翻译"));
         input.set_input_purpose(gtk::InputPurpose::FreeForm);
         set_text_font(&input, 15);
         input.set_margin_top(12);
@@ -361,7 +367,7 @@ impl UiState {
         let input_scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
-            .min_content_height(140)
+            .min_content_height(150)
             .max_content_height(260)
             .propagate_natural_height(true)
             .has_frame(false)
@@ -378,19 +384,23 @@ impl UiState {
         translate_button.add_css_class("suggested-action");
         translate_button.set_visible(false);
 
-        let input_card = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let input_title = gtk::Label::new(Some("输入"));
+        set_label_font(&input_title, 15, true);
+        let input_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        input_header.append(&input_title);
+        let input_header_spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        input_header_spacer.set_hexpand(true);
+        input_header.append(&input_header_spacer);
+        input_header.append(&direction);
+        input_header.append(&translate_button);
+
+        let input_card = gtk::Box::new(gtk::Orientation::Vertical, 0);
         input_card.add_css_class("card");
         input_card.append(&input_scrolled);
 
-        let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        bottom.set_margin_start(12);
-        bottom.set_margin_end(12);
-        bottom.append(&direction);
-        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        spacer.set_hexpand(true);
-        bottom.append(&spacer);
-        bottom.append(&translate_button);
-        input_card.append(&bottom);
+        let input_section = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        input_section.append(&input_header);
+        input_section.append(&input_card);
 
         let divider = gtk::Separator::new(gtk::Orientation::Horizontal);
         divider.set_margin_top(2);
@@ -405,25 +415,32 @@ impl UiState {
         status.add_css_class("error");
         status.set_visible(false);
 
-        let results_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let results_scrolled = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vscrollbar_policy(gtk::PolicyType::Automatic)
-            .vexpand(true)
-            .child(&results_box)
-            .build();
+        let results_title = gtk::Label::new(Some("翻译结果"));
+        set_label_font(&results_title, 15, true);
+        results_title.set_xalign(0.0);
 
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        let results_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        results_box.set_homogeneous(true);
+        results_box.set_vexpand(true);
+
+        let results_section = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        results_section.set_vexpand(true);
+        results_section.append(&results_title);
+        results_section.append(&results_box);
+
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        content.set_vexpand(true);
         content.set_margin_top(14);
         content.set_margin_bottom(14);
         content.set_margin_start(24);
         content.set_margin_end(24);
-        content.append(&input_card);
+        content.append(&input_section);
         content.append(&divider);
         content.append(&status);
-        content.append(&results_scrolled);
+        content.append(&results_section);
 
         let clamp = adw::Clamp::new();
+        clamp.set_vexpand(true);
         clamp.set_maximum_size(640);
         clamp.set_tightening_threshold(480);
         clamp.set_child(Some(&content));
