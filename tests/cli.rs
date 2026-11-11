@@ -146,16 +146,50 @@ fn source_all_uses_bing_when_only_bing_enabled() {
 }
 
 #[test]
-// v0.1 中朗读明确返回 v1.1 提示。
-fn speak_is_v11() {
+// v0.2 朗读只支持英文译文：中文目标在发请求前拒绝。
+fn speak_rejects_chinese_target() {
     let server = MockServer::start();
     let temp = tempfile::tempdir().unwrap();
 
     cmd(&server, temp.path())
-        .args(["--speak", "hello"])
+        .args(["--speak", "--to", "zh", "hello"])
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("v1.1"));
+        .stderr(predicate::str::contains("仅支持英文译文"));
+}
+
+#[test]
+// --json 的 phonetic 对英文单词填词典 IPA；词典走 mock，不访问真实网络。
+fn json_output_includes_phonetic_for_english_word() {
+    let server = MockServer::start();
+    mock_bing(&server, "Hello", r#",{"inputTransliteration":"Nǐ hǎo"}"#);
+    server.mock(|when, then| {
+        when.method(GET).path("/hello");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(
+                r#"[{"word":"hello","phonetics":[
+                    {"text":"/həˈləʊ/","audio":"https://example.com/hello-uk.mp3"},
+                    {"text":"/həˈloʊ/","audio":""}
+                ]}]"#,
+            );
+    });
+    let temp = tempfile::tempdir().unwrap();
+
+    let output = cmd(&server, temp.path())
+        .env("STFN_DICT_BASE_URL", server.base_url())
+        .args(["--json", "你好"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["target"], "en");
+    assert_eq!(value["results"][0]["text"], "Hello");
+    assert_eq!(value["results"][0]["phonetic"], "/həˈloʊ/");
 }
 
 #[test]
