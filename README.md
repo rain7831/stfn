@@ -164,12 +164,15 @@ window-rule {
 
 设计文档见 `docs/tech/`：
 
-- `architecture.md` —— 进程模型、单实例、模块划分
+- `architecture.md` —— 进程模型、窗口生命周期、模块划分
 - `ui.md` —— 主窗口布局、交互、输入法
 - `settings.md` —— 应用内设置页、密钥存储与校验
 - `providers.md` —— 各翻译平台接口与能力降级
 - `cli.md` —— 命令行参数与输出格式
 - `config.md` —— 配置项与环境变量
+- `pronunciation.md` —— v0.2 英文音标/发音设计
+- `selection.md` —— v0.2 niri 选区翻译设计
+- `v0.2-plan.md` —— v0.2 功能规划
 
 ## 安装
 

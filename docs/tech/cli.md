@@ -1,6 +1,6 @@
 # 命令行设计
 
-> 状态：已按 v0.1 实现校准（`--speak` 为 v1.1）
+> 状态：v0.1 已实现；v0.2 设计进行中（`selection` / `--speak`）
 > 关联：`README.md`、`architecture.md`、`providers.md`、`config.md`
 
 ## 1. 命令模型
@@ -8,13 +8,15 @@
 ```
 stfn [OPTIONS] [TEXT]...
 stfn settings
+stfn selection
 ```
 
-- 无 `TEXT` 且无子命令：打开 GUI。
+- 无 `TEXT` 且无子命令：新进程打开 GUI 主窗口。
 - `TEXT` 为普通参数：翻译并输出到 stdout。
 - `TEXT` 为 `-`：从 stdin 读取到 EOF。
-- `settings`：打开应用内设置页。
-- CLI 模式不初始化 GTK，不注册 GApplication。
+- `settings`：新进程打开主窗口并进入设置页。
+- `selection`：新进程读取 primary selection，填入并自动翻译（v0.2）。
+- GUI 模式不使用单实例；每个进程一个窗口。CLI 模式不初始化 GTK。
 
 ## 2. 参数
 
@@ -23,7 +25,7 @@ stfn settings
 | `-t, --to` | `auto` / `zh` / `en` | 配置 `general.target` | 强制目标语言 |
 | `-s, --source` | `bing` / `volcengine` / `alibaba` / `all`，可用逗号分隔 | 配置 `general.default_source` | 指定翻译源 |
 | `--notify` | flag | off | 结果发送桌面通知，不输出 stdout |
-| `--speak` | flag | off | 翻译后朗读译文（v1.1） |
+| `--speak` | flag | off | 翻译后朗读英文译文（v0.2；默认 US） |
 | `--json` | flag | off | JSON 输出 |
 | `-h, --help` | flag | — | 帮助 |
 | `-V, --version` | flag | — | 版本 |
@@ -34,6 +36,7 @@ stfn settings
 - `--notify` 与 `--speak` 可以同时使用（先通知后朗读）。
 - `--json` 与 `--speak` 可以同时使用（JSON 到 stdout，音频为副作用）。
 - `--source all` 展开为所有已启用平台；缺凭据的平台以错误行展示。
+- `stfn selection` 不输出 stdout；它是 GUI 启动意图。
 - 文本参数用单个空格连接；`-` 只能作为唯一的文本参数。
 - 单次输入上限 5000 字符；超出返回 2。
 
@@ -102,7 +105,9 @@ $ stfn --source all hello
 
 ### 3.4 `--speak`
 
-- 先翻译，再用 TTS 播放译文；v1.1。
+- 先翻译，再用 TTS 播放译文；v0.2。
+- 当前仅支持英文译文；中文目标返回 1 并提示。
+- 默认 US 音色，暂不提供 `--accent`。
 - 无可用 TTS：stderr 提示“朗读不可用”，返回 1。
 - 音频播放不阻塞 stdout / JSON 输出。
 
@@ -143,8 +148,11 @@ printf '你好' | stfn --json -
 # GUI
 stfn
 
-# 打开设置
+# 打开设置（新进程）
 stfn settings
+
+# 选区翻译（v0.2）：先在其它应用选中文本再执行
+stfn selection
 
 # 默认源，自动识别方向
 stfn hello

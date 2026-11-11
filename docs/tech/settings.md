@@ -1,14 +1,14 @@
 # 应用内设置页与密钥存储
 
-> 状态：已按 v0.1 实现校准
-> 关联：`README.md`、`ui.md`、`config.md`、`architecture.md`
+> 状态：v0.1 已实现；v0.2 进程模型设计进行中
+> 关联：`README.md`、`ui.md`、`config.md`、`architecture.md`、`selection.md`
 
 ## 1. 入口与形态
 
 - 主窗口顶栏齿轮按钮。
 - `Ctrl+,`。
-- 命令行 `stfn settings`：GUI 未运行时先启动主窗口，再切到设置页；已打开则保持当前页。
-- 设置页使用 `AdwNavigationView` 在主窗口内 push，不新开浮动窗口。
+- 命令行 `stfn settings`：**每次启动新进程**，构建主窗口并直接 push 设置页；不再复用已有实例。
+- 设置页使用 `AdwNavigationView` 在主窗口内 push，不新开浮动窗口；窗口内 `Ctrl+,` 也进入设置页。
 - 顶部栏：返回按钮、标题“设置”、保存按钮。
 
 ## 2. 布局

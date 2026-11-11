@@ -1,6 +1,6 @@
 # 翻译源设计
 
-> 状态：已按 v0.1 实现校准 · 朗读 v1.1
+> 状态：v0.1 已实现；v0.2 音标/发音为应用侧后处理
 > 关联：`architecture.md`、`config.md`、`settings.md`
 
 ## 1. 统一接口
@@ -25,12 +25,12 @@ pub trait Provider: Send + Sync {
 | --- | --- | --- | --- |
 | 中→英 / 英→中 | ✅ | ✅ | ✅ |
 | 自动识别源语言 | ✅ | ✅（可显式传源语言） | ✅ |
-| 音标 | ❌（v1 不承诺） | ❌ | ❌ |
-| 朗读 | v1.1（Edge TTS，非官方） | 需另开语音合成 | 需另开语音合成 |
+| 音标（英文） | ❌（v0.2 由词典后处理） | ❌ | ❌ |
+| 朗读 | v0.2（词典音频 / Edge TTS） | 需另开语音合成 | 需另开语音合成 |
 | 凭据 | 无 | Access Key / Secret Key | AccessKey ID / Secret |
 | 区域配置 | 无 | 无（内部固定 cn-north-1） | 无（内部固定 cn-hangzhou） |
 
-> 音标、朗读在 v1.1 前一律返回 `None` / `Unsupported`；UI 不显示对应控件。
+> provider 不负责英文 IPA：Bing 只返回中文拼音 transliteration，火山/阿里只返回译文。v0.2 的英文单词音标/音频由 `pronunciation.md` 的词典服务后处理；provider 不返回 `phonetics`。
 
 ## 3. Bing（默认，免密钥）
 
@@ -75,9 +75,9 @@ fromLang=en&to=zh-Hans&text=hello&token=<token>&key=<key>&tryFetchingGenderDebia
 
 ### 3.3 音标 / 朗读
 
-- v1 不调用词典接口，`phonetics = None`。
-- v1.1 再评估 Edge read-aloud（非官方 WebSocket）或本地 TTS。
-- 失败时隐藏播放按钮；`--speak` 返回非零并提示“朗读不可用”。
+- Bing 的 `translations[].transliteration` 是中文拼音（如 `Nǐ hǎo`），不是英文 IPA；`inputTransliteration` 也是中文输入拼音。
+- v0.2 不把 Bing transliteration 当英文音标使用；英文音标由 `dictionaryapi.dev` 后处理。
+- `--speak` 使用 Edge TTS / 词典音频，失败返回非零；不阻塞翻译结果。
 
 ### 3.4 风险
 

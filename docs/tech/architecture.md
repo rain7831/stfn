@@ -1,7 +1,7 @@
 # STFN 架构设计
 
-> 状态：已按 v0.1 实现校准
-> 关联：`README.md`、`ui.md`、`settings.md`、`providers.md`、`cli.md`、`config.md`
+> 状态：v0.1 已实现；v0.2 设计进行中
+> 关联：`README.md`、`v0.2-plan.md`、`pronunciation.md`、`selection.md`、`ui.md`、`settings.md`、`providers.md`、`cli.md`、`config.md`
 
 ## 1. 目标与约束
 
@@ -15,26 +15,28 @@
 
 | 模式 | 触发 | 行为 |
 | --- | --- | --- |
-| GUI | `stfn` | 启动 GTK4 主窗口；单实例 |
-| Settings | `stfn settings`、主窗口齿轮、`Ctrl+,` | 在主窗口内 push 设置页（AdwNavigationView） |
+| GUI | `stfn` | 新进程，启动 GTK4 主窗口 |
+| Settings | `stfn settings`、主窗口齿轮、`Ctrl+,` | 新进程启动主窗口并 push 设置页；窗口内 `Ctrl+,` 也进入设置页 |
+| Selection | `stfn selection` | 新进程，读取 primary selection、填入并自动翻译 |
 | CLI | `stfn <text>`、`stfn -` | 不初始化 GTK；翻译后输出并退出 |
 
-- 无常驻 daemon；关闭主窗口即退出。
-- GUI 使用 `GtkApplication` 保证单实例：重复 `stfn` 通过 `activate` 聚焦已有窗口。
+- 无常驻 daemon；每个窗口一个进程，关闭窗口即退出。
+- v0.2 取消单实例：`adw::Application` 使用 `gio::ApplicationFlags::NON_UNIQUE`，每次启动独立进程/窗口，不维护 `state_slot`，不做 command-line 转发。
 - GApplication ID 使用 `dev.stfn.Stfn`；窗口 realize 后调用 `gdk_wayland_toplevel_set_application_id(toplevel, "stfn")`，使 niri 的 `match app-id="^stfn$"` 生效。
-- `stfn settings` 在 GUI 未运行时先启动 GUI，再切到设置页；已打开则保持当前页。
-- CLI 进程不注册 GApplication，避免与 GUI 抢单实例。
+- `stfn settings` 每次启动新进程并直接进入设置页；`stfn selection` 每次启动新进程读取 primary selection。
+- CLI 进程不注册 GApplication。
 
 ## 3. 启动流程
 
 ### GUI
 
-1. 解析 argv；若是 CLI 形态直接走 CLI。
+1. 解析 argv，得到 `GuiIntent`（Open / Settings / Selection）或 CLI。
 2. 读取 `config.toml` 与凭据（见 `config.md`）。
-3. 初始化 GTK / libadwaita，创建 `StfnApplication`。
+3. 初始化 GTK / libadwaita，创建 `NON_UNIQUE` 的 `StfnApplication`。
 4. 构建主窗口与 `AdwNavigationView`（见 `ui.md`），按启用平台创建结果行。
-5. 懒加载后台 runtime（首次翻译时才启动）。
-6. 聚焦输入框。
+5. Settings 意图 push 设置页；Selection 意图读取 primary selection。
+6. 懒加载后台 runtime（翻译 / 词典 / TTS）。
+7. present 后 idle 聚焦输入框。
 
 ### CLI
 
@@ -51,13 +53,14 @@
 | --- | --- | --- |
 | `main` | 参数分派、日志初始化、退出码 | clap |
 | `cli` | 文本收集、输出格式、通知、朗读 | providers, notify |
-| `app` | GtkApplication、单实例、窗口生命周期 | gtk4, libadwaita |
-| `ui` | 主窗口、结果行、设置窗口 | gtk4, libadwaita |
+| `app` | GtkApplication、窗口生命周期、GuiIntent | gtk4, libadwaita |
+| `ui` | 主窗口、结果卡片、设置页、选区注入 | gtk4, libadwaita |
 | `core` | 语言检测、去抖、请求编排、缓存 | tokio, lru |
 | `providers` | Bing / 火山 / 阿里适配器、统一 trait | reqwest, hmac, sha2, sha1 |
+| `pronunciation` | 英文单词词典查询、音标解析、音频缓存 | reqwest, lru |
+| `tts` | Edge TTS 合成与音频播放（v0.2） | msedge-tts, rodio |
 | `config` | 配置读写、校验、迁移 | serde, toml_edit |
 | `secrets` | Secret Service / 0600 文件 | keyring, zeroize |
-| `tts` | 朗读（v1.1） | rodio |
 | `platform` | niri / Wayland 细节（app-id） | gdk4-wayland |
 
 依赖方向：`ui -> core -> providers`；`app -> ui`；`config` / `secrets` 被 `app` 与 `cli` 使用；provider 不依赖 UI。
@@ -69,6 +72,8 @@
 - UI → core：`async_channel::Sender<Command>`。
 - core → UI：`glib::MainContext::invoke` 回到主线程。
 - 配置保存是短文件 I/O，可在主线程同步完成（原子写），避免跨线程复杂度。
+- 词典查询、Edge TTS 合成走后台 runtime；音频播放由独立线程持有 `rodio::OutputStream`。
+- primary selection 读取在 GTK 主循环发起，使用异步 `read_text_future` + 2s 超时。
 - 请求取消：每次输入递增 `generation: AtomicU64`；结果携带 generation，UI 丢弃过期结果；可选 abort 旧请求。
 
 ## 6. 翻译数据流
@@ -136,10 +141,13 @@ struct ProviderError {
 ## 9. 安全与隐私
 
 - 密钥优先级：环境变量 > Secret Service（`keyring` crate）> `credentials.toml`（0600）。
+- 词典/ TTS attribution 见 `pronunciation.md`。
 - 日志只记录 provider、状态码、耗时；不记录请求 / 响应正文、Authorization、密钥。
 - 不落盘翻译内容；缓存仅内存，退出即清。
 - 所有云 API 走 TLS（rustls）。
 - `--notify` 会把译文交给桌面通知服务，属于用户显式操作。
+- 英文词典查询会把单词发送给 dictionaryapi.dev；TTS 会把待朗读文本发送给 Edge TTS；不记录、不遥测。
+- 选区翻译只读取 primary selection，不覆盖剪贴板。
 - 设置页修改未保存时返回/退出会弹确认；密钥在 UI 中显示为 `******`，清空保存才删除。
 
 ## 10. 依赖清单
@@ -157,7 +165,8 @@ struct ProviderError {
 | 日志 | `tracing`, `tracing-subscriber` |
 | 缓存 | `lru` |
 | 错误 | `thiserror`, `anyhow` |
-| 朗读（v1.1） | `rodio` |
+| 朗读 / TTS（v0.2） | `msedge-tts`, `rodio` |
+| 词典测试 | `httpmock`（dictionaryapi fixture） |
 | 测试 | `wiremock` / `httpmock`, `assert_cmd` |
 
 > 不引入 WebKit、Electron、Qt，也不引入 OpenSSL（使用 rustls）。
@@ -188,4 +197,7 @@ struct ProviderError {
 | preedit 触发 changed | 拼音被翻译 | 实测 fcitx5；必要时监听 IM context |
 | Secret Service 不可用 / 锁定 | 密钥无法保存 | 明确提示；用户确认后回退 0600 |
 | 云厂商签名实现偏差 | 401 | 火山已实测；阿里用官方参数 + mock 测试，真实密钥待验 |
-| 朗读接口非官方 | v1.1 不稳定 | 标记实验性；失败不阻塞翻译 |
+| 词典 API 不可用 | 音标缺失 | 超时/404 静默隐藏；不阻塞翻译 |
+| Edge TTS 非官方 | 发音不可用 | 标记实验性；失败只隐藏播放按钮 |
+| primary selection 不被应用设置 | 选区翻译失败 | 明确提示；不做剪贴板/Ctrl+C 回退 |
+| 多进程内存重复 | 多窗口占用高 | 接受短生命周期；关闭即退出 |
