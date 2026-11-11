@@ -24,12 +24,7 @@ pub struct Volcengine {
 }
 
 impl Volcengine {
-    pub fn new(
-        client: reqwest::Client,
-        access_key: String,
-        secret_key: String,
-        region: String,
-    ) -> Self {
+    pub fn new(client: reqwest::Client, access_key: String, secret_key: String) -> Self {
         let base_url = std::env::var("STFN_VOLC_BASE_URL").unwrap_or_else(|_| BASE_URL.to_string());
         let host = reqwest::Url::parse(&base_url)
             .ok()
@@ -39,7 +34,7 @@ impl Volcengine {
             client,
             access_key,
             secret_key,
-            region,
+            region: "cn-north-1".to_string(),
             base_url,
             host,
         }
@@ -94,7 +89,7 @@ impl Provider for Volcengine {
         Capabilities {
             phonetics: false,
             tts: false,
-            auto_detect: false,
+            auto_detect: true,
         }
     }
 
@@ -105,7 +100,7 @@ impl Provider for Volcengine {
         let body = serde_json::json!({
             "SourceLanguage": request.from.code(),
             "TargetLanguage": request.to.code(),
-            "Text": [request.text],
+            "TextList": [request.text],
         })
         .to_string();
 
@@ -168,7 +163,7 @@ struct VolcResponse {
 struct VolcItem {
     #[serde(rename = "Translation")]
     translation: Option<String>,
-    #[serde(rename = "DetectedLanguage")]
+    #[serde(rename = "DetectedSourceLanguage")]
     detected_language: Option<String>,
 }
 

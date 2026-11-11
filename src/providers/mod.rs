@@ -1,5 +1,5 @@
+pub mod alibaba;
 pub mod bing;
-pub mod tencent;
 pub mod volcengine;
 
 use std::sync::Arc;
@@ -14,12 +14,12 @@ pub struct BuiltProvider {
 }
 
 pub fn all_ids() -> [&'static str; 3] {
-    ["bing", "volcengine", "tencent"]
+    ["bing", "volcengine", "alibaba"]
 }
 
 pub fn build_providers(
     ids: &[&'static str],
-    config: &Config,
+    _config: &Config,
     credentials: &Credentials,
     client: &reqwest::Client,
 ) -> Vec<BuiltProvider> {
@@ -36,7 +36,6 @@ pub fn build_providers(
                         client.clone(),
                         access_key,
                         secret_key,
-                        config.providers.volcengine.region.clone(),
                     ))),
                 },
                 None => BuiltProvider {
@@ -44,19 +43,18 @@ pub fn build_providers(
                     result: Err(ProviderError::auth("缺少火山引擎密钥，请在设置中填写")),
                 },
             },
-            "tencent" => match credentials.tencent_pair() {
-                Some((secret_id, secret_key)) => BuiltProvider {
-                    id: "tencent",
-                    result: Ok(Arc::new(tencent::Tencent::new(
+            "alibaba" => match credentials.alibaba_pair() {
+                Some((access_key_id, access_key_secret)) => BuiltProvider {
+                    id: "alibaba",
+                    result: Ok(Arc::new(alibaba::Alibaba::new(
                         client.clone(),
-                        secret_id,
-                        secret_key,
-                        config.providers.tencent.region.clone(),
+                        access_key_id,
+                        access_key_secret,
                     ))),
                 },
                 None => BuiltProvider {
-                    id: "tencent",
-                    result: Err(ProviderError::auth("缺少腾讯云密钥，请在设置中填写")),
+                    id: "alibaba",
+                    result: Err(ProviderError::auth("缺少阿里云 AccessKey，请在设置中填写")),
                 },
             },
             other => BuiltProvider {

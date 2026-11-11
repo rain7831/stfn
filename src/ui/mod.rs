@@ -12,6 +12,9 @@ use crate::providers;
 use crate::secrets::{self, Credentials};
 use crate::translate::{self, ProviderError, TranslateCache, TranslateOutput, TranslateRequest};
 
+const SENTINEL: &str = "******";
+const ROW_INSET: i32 = 10;
+
 enum UiEvent {
     Result {
         generation: u64,
@@ -37,15 +40,18 @@ impl ProviderRow {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 4);
         root.set_margin_top(10);
         root.set_margin_bottom(10);
-        root.set_margin_start(12);
-        root.set_margin_end(12);
+        root.set_margin_start(ROW_INSET);
+        root.set_margin_end(ROW_INSET);
 
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        header.set_visible(true);
+        let dot = gtk::Label::new(Some("●"));
+        dot.add_css_class("caption");
+        dot.add_css_class("accent");
+        header.append(&dot);
+
         let name = gtk::Label::new(Some(provider_label(id)));
-        name.set_visible(true);
         name.add_css_class("caption");
-        name.add_css_class("dim-label");
+        name.add_css_class("heading");
         name.set_xalign(0.0);
         header.append(&name);
 
@@ -54,6 +60,7 @@ impl ProviderRow {
         header.append(&spacer);
 
         let phonetic = gtk::Label::new(None);
+        phonetic.add_css_class("caption");
         phonetic.add_css_class("dim-label");
         phonetic.set_visible(false);
         header.append(&phonetic);
@@ -176,9 +183,124 @@ impl ProviderRow {
     }
 }
 
+#[derive(Clone)]
+enum KeyAction {
+    Keep,
+    Delete,
+    Set(String),
+}
+
+#[derive(Clone)]
+struct KeyField {
+    row: adw::PasswordEntryRow,
+    field: &'static str,
+    had_key: bool,
+    env: bool,
+}
+
+impl KeyField {
+    fn new(title: &str, field: &'static str, had_key: bool, dirty: &Rc<Cell<bool>>) -> Self {
+        let row = adw::PasswordEntryRow::new();
+        let env = secrets::env_is_set(field);
+        let has_key = env || had_key;
+
+        if env {
+            row.set_title(&format!("{title}（环境变量）"));
+            row.set_text(SENTINEL);
+            row.set_editable(false);
+            row.set_tooltip_text(Some("由环境变量提供，设置中不可修改"));
+        } else {
+            row.set_title(&if has_key {
+                format!("{title} · 已保存")
+            } else {
+                title.to_string()
+            });
+            row.set_text(if has_key { SENTINEL } else { "" });
+            row.set_tooltip_text(Some("显示 ****** 表示已保存；全选后输入新密钥，清空则删除"));
+        }
+
+        if !env {
+            let dirty = dirty.clone();
+            let base_title = title.to_string();
+            let row_for_title = row.clone();
+            row.connect_changed(move |row| {
+                dirty.set(true);
+                let text = row.text().to_string();
+                let suffix = if text == SENTINEL {
+                    Some("已保存")
+                } else if text.is_empty() {
+                    if has_key {
+                        Some("将删除")
+                    } else {
+                        None
+                    }
+                } else {
+                    Some("将更新")
+                };
+                let title = match suffix {
+                    Some(suffix) => format!("{base_title} · {suffix}"),
+                    None => base_title.clone(),
+                };
+                row_for_title.set_title(&title);
+            });
+
+            let focus = gtk::EventControllerFocus::new();
+            let row_for_focus = row.clone();
+            focus.connect_enter(move |_| {
+                if row_for_focus.text() == SENTINEL {
+                    row_for_focus.select_region(0, -1);
+                }
+            });
+            row.add_controller(focus);
+        }
+
+        Self {
+            row,
+            field,
+            had_key: has_key,
+            env,
+        }
+    }
+
+    fn action(&self) -> KeyAction {
+        if self.env {
+            return KeyAction::Keep;
+        }
+        let text = self.row.text().to_string();
+        if text == SENTINEL {
+            return KeyAction::Keep;
+        }
+        let value = text.strip_prefix(SENTINEL).unwrap_or(&text).to_string();
+        if value.is_empty() {
+            if self.had_key {
+                KeyAction::Delete
+            } else {
+                KeyAction::Keep
+            }
+        } else {
+            KeyAction::Set(value)
+        }
+    }
+
+    fn satisfied(&self) -> bool {
+        if self.env {
+            return true;
+        }
+        match self.action() {
+            KeyAction::Keep => self.had_key,
+            KeyAction::Delete => false,
+            KeyAction::Set(value) => !value.is_empty(),
+        }
+    }
+
+    fn is_new(&self) -> bool {
+        matches!(self.action(), KeyAction::Set(_))
+    }
+}
+
 struct UiState {
-    app: adw::Application,
     window: adw::ApplicationWindow,
+    nav: adw::NavigationView,
     input: gtk::Text,
     direction: gtk::Label,
     translate_button: gtk::Button,
@@ -195,7 +317,9 @@ struct UiState {
     debounce: RefCell<Option<glib::SourceId>>,
     event_tx: async_channel::Sender<UiEvent>,
     event_rx: RefCell<Option<async_channel::Receiver<UiEvent>>>,
-    settings_slot: Rc<RefCell<Option<adw::ApplicationWindow>>>,
+    settings_page: RefCell<Option<adw::NavigationPage>>,
+    settings_dirty: Rc<Cell<bool>>,
+    settings_save: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
 impl UiState {
@@ -212,15 +336,14 @@ impl UiState {
         window.set_size_request(320, 400);
 
         let window_for_realize = window.clone();
-        window.connect_realize(move |_| {
-            apply_app_id(&window_for_realize);
-        });
+        window.connect_realize(move |_| apply_app_id(&window_for_realize));
         let window_for_map = window.clone();
-        window.connect_map(move |_| {
-            apply_app_id(&window_for_map);
-        });
+        window.connect_map(move |_| apply_app_id(&window_for_map));
 
         let header = adw::HeaderBar::new();
+        let title = gtk::Label::new(Some("STFN"));
+        title.add_css_class("heading");
+        header.set_title_widget(Some(&title));
         let settings_button = gtk::Button::from_icon_name("emblem-system-symbolic");
         settings_button.set_tooltip_text(Some("设置 (Ctrl+,)"));
         header.pack_end(&settings_button);
@@ -246,7 +369,9 @@ impl UiState {
             .build();
 
         let direction = gtk::Label::new(None);
-        direction.add_css_class("dim-label");
+        direction.add_css_class("caption");
+        direction.add_css_class("accent");
+        direction.add_css_class("heading");
         direction.set_xalign(0.0);
         direction.set_visible(false);
 
@@ -259,6 +384,8 @@ impl UiState {
         input_card.append(&input_scrolled);
 
         let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        bottom.set_margin_start(10);
+        bottom.set_margin_end(10);
         bottom.append(&direction);
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
@@ -266,9 +393,15 @@ impl UiState {
         bottom.append(&translate_button);
         input_card.append(&bottom);
 
+        let divider = gtk::Separator::new(gtk::Orientation::Horizontal);
+        divider.set_margin_top(2);
+        divider.set_margin_bottom(2);
+
         let status = gtk::Label::new(None);
         status.set_wrap(true);
         status.set_xalign(0.0);
+        status.set_margin_start(10);
+        status.set_margin_end(10);
         status.add_css_class("error");
         status.set_visible(false);
 
@@ -286,13 +419,19 @@ impl UiState {
         content.set_margin_start(12);
         content.set_margin_end(12);
         content.append(&input_card);
+        content.append(&divider);
         content.append(&status);
         content.append(&results_scrolled);
 
-        let toolbar = adw::ToolbarView::new();
-        toolbar.add_top_bar(&header);
-        toolbar.set_content(Some(&content));
-        window.set_content(Some(&toolbar));
+        let main_toolbar = adw::ToolbarView::new();
+        main_toolbar.add_top_bar(&header);
+        main_toolbar.set_content(Some(&content));
+        let main_page = adw::NavigationPage::new(&main_toolbar, "STFN");
+
+        let nav = adw::NavigationView::new();
+        nav.set_pop_on_escape(false);
+        nav.push(&main_page);
+        window.set_content(Some(&nav));
 
         let (event_tx, event_rx) = async_channel::unbounded();
         let client = reqwest::Client::builder()
@@ -307,8 +446,8 @@ impl UiState {
             .expect("创建异步运行时");
 
         let state = Rc::new(Self {
-            app: app.clone(),
             window,
+            nav,
             input,
             direction,
             translate_button,
@@ -325,13 +464,14 @@ impl UiState {
             debounce: RefCell::new(None),
             event_tx,
             event_rx: RefCell::new(Some(event_rx)),
-            settings_slot: Rc::new(RefCell::new(None)),
+            settings_page: RefCell::new(None),
+            settings_dirty: Rc::new(Cell::new(false)),
+            settings_save: RefCell::new(None),
         });
 
         state.attach();
         state.rebuild_rows();
         state.update_auto_ui();
-
         state
     }
 
@@ -352,9 +492,24 @@ impl UiState {
         });
 
         let key_controller = gtk::EventControllerKey::new();
+        key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
         let state = self.clone();
         key_controller.connect_key_pressed(move |_, keyval, _, modifier| {
             let ctrl = modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            let settings_open = state.settings_page.borrow().is_some();
+
+            if settings_open {
+                if ctrl && keyval.to_unicode() == Some('s') {
+                    state.save_settings();
+                    return glib::Propagation::Stop;
+                }
+                if keyval == gtk::gdk::Key::Escape {
+                    state.request_close_settings();
+                    return glib::Propagation::Stop;
+                }
+                return glib::Propagation::Proceed;
+            }
+
             if ctrl && (keyval == gtk::gdk::Key::Return || keyval == gtk::gdk::Key::KP_Enter) {
                 state.translate_now();
                 return glib::Propagation::Stop;
@@ -378,6 +533,36 @@ impl UiState {
             glib::Propagation::Proceed
         });
         self.window.add_controller(key_controller);
+
+        let state = self.clone();
+        self.window.connect_close_request(move |window| {
+            if state.settings_page.borrow().is_some() && state.settings_dirty.get() {
+                let state = state.clone();
+                let window = window.clone();
+                let window_for_dialog = window.clone();
+                show_discard_dialog(&window, move || {
+                    state.settings_dirty.set(false);
+                    window_for_dialog.close();
+                });
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+
+        let state_for_popped = self.clone();
+        self.nav.connect_popped(move |_, page| {
+            let is_settings = state_for_popped
+                .settings_page
+                .borrow()
+                .as_ref()
+                .is_some_and(|settings| settings == page);
+            if is_settings {
+                *state_for_popped.settings_page.borrow_mut() = None;
+                *state_for_popped.settings_save.borrow_mut() = None;
+                state_for_popped.settings_dirty.set(false);
+            }
+        });
 
         if let Some(rx) = self.event_rx.borrow_mut().take() {
             let state = self.clone();
@@ -615,48 +800,77 @@ impl UiState {
         *self.config.borrow_mut() = loaded.config;
         let (credentials, _) = secrets::load();
         *self.credentials.borrow_mut() = credentials;
+        if !self.config.borrow().general.auto_translate {
+            self.cancel_debounce();
+        }
         self.rebuild_rows();
         self.update_auto_ui();
     }
 
     fn open_settings(self: &Rc<Self>) {
-        if let Some(window) = self.settings_slot.borrow().as_ref() {
-            window.present();
+        if self.settings_page.borrow().is_some() {
             return;
         }
 
-        let window = build_settings(self);
-        *self.settings_slot.borrow_mut() = Some(window.clone());
-        let slot = self.settings_slot.clone();
-        window.connect_close_request(move |_| {
-            *slot.borrow_mut() = None;
-            glib::Propagation::Proceed
+        self.settings_dirty.set(false);
+        let (page, save) = build_settings(self);
+        *self.settings_save.borrow_mut() = Some(save);
+        *self.settings_page.borrow_mut() = Some(page.clone());
+        self.nav.push(&page);
+    }
+
+    fn close_settings(&self) {
+        if self.settings_page.borrow_mut().take().is_some() {
+            self.nav.pop();
+        }
+        *self.settings_save.borrow_mut() = None;
+        self.settings_dirty.set(false);
+    }
+
+    fn request_close_settings(self: &Rc<Self>) {
+        if !self.settings_dirty.get() {
+            self.close_settings();
+            return;
+        }
+
+        let state = self.clone();
+        show_discard_dialog(self.window.upcast_ref::<gtk::Window>(), move || {
+            state.settings_dirty.set(false);
+            state.close_settings();
         });
-        window.present();
+    }
+
+    fn save_settings(&self) {
+        let save = self.settings_save.borrow().clone();
+        if let Some(save) = save {
+            save();
+        }
     }
 }
 
-fn build_settings(state: &Rc<UiState>) -> adw::ApplicationWindow {
-    let window = adw::ApplicationWindow::builder()
-        .application(&state.app)
-        .title("设置")
-        .default_width(520)
-        .default_height(680)
-        .transient_for(&state.window)
-        .build();
-    window.set_size_request(420, 480);
+fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
+    state.settings_dirty.set(false);
+    let dirty = state.settings_dirty.clone();
 
     let header = adw::HeaderBar::new();
-    let cancel = gtk::Button::with_label("取消");
-    let save = gtk::Button::with_label("保存");
-    save.add_css_class("suggested-action");
-    header.pack_start(&cancel);
-    header.pack_end(&save);
+    header.set_show_back_button(false);
+    let title = gtk::Label::new(Some("设置"));
+    title.add_css_class("heading");
+    header.set_title_widget(Some(&title));
+
+    let back = gtk::Button::from_icon_name("go-previous-symbolic");
+    back.set_tooltip_text(Some("返回"));
+    header.pack_start(&back);
+
+    let save_button = gtk::Button::with_label("保存");
+    save_button.add_css_class("suggested-action");
+    header.pack_end(&save_button);
 
     let page = adw::PreferencesPage::new();
 
     let general_group = adw::PreferencesGroup::new();
     general_group.set_title("翻译");
+
     let auto = adw::SwitchRow::new();
     auto.set_title("自动翻译");
     auto.set_subtitle("输入停止后自动翻译");
@@ -668,13 +882,12 @@ fn build_settings(state: &Rc<UiState>) -> adw::ApplicationWindow {
     spin.set_subtitle("毫秒");
     spin.set_value(state.config.borrow().general.debounce_ms as f64);
     spin.set_sensitive(auto.is_active());
-    let spin_for_auto = spin.clone();
-    auto.connect_active_notify(move |row| spin_for_auto.set_sensitive(row.is_active()));
     general_group.add(&spin);
     page.add(&general_group);
 
     let providers_group = adw::PreferencesGroup::new();
     providers_group.set_title("翻译源");
+    providers_group.set_description(Some("显示 ****** 表示密钥已保存；留空并保存表示删除"));
 
     let bing = adw::SwitchRow::new();
     bing.set_title("Bing");
@@ -682,42 +895,60 @@ fn build_settings(state: &Rc<UiState>) -> adw::ApplicationWindow {
     bing.set_active(state.config.borrow().providers.bing.enabled);
     providers_group.add(&bing);
 
-    let volc = adw::SwitchRow::new();
+    let credentials = state.credentials.borrow();
+    let volc_ak = KeyField::new(
+        "Access Key",
+        "volcengine.access_key",
+        credentials.volcengine.access_key.is_some(),
+        &dirty,
+    );
+    let volc_sk = KeyField::new(
+        "Secret Key",
+        "volcengine.secret_key",
+        credentials.volcengine.secret_key.is_some(),
+        &dirty,
+    );
+    let ali_id = KeyField::new(
+        "AccessKey ID",
+        "alibaba.access_key_id",
+        credentials.alibaba.access_key_id.is_some(),
+        &dirty,
+    );
+    let ali_secret = KeyField::new(
+        "AccessKey Secret",
+        "alibaba.access_key_secret",
+        credentials.alibaba.access_key_secret.is_some(),
+        &dirty,
+    );
+    drop(credentials);
+
+    let volc = adw::ExpanderRow::new();
     volc.set_title("火山引擎");
     volc.set_subtitle("机器翻译");
-    volc.set_active(state.config.borrow().providers.volcengine.enabled);
+    volc.set_show_enable_switch(true);
+    volc.set_enable_expansion(state.config.borrow().providers.volcengine.enabled);
+    volc.set_expanded(state.config.borrow().providers.volcengine.enabled);
+    volc.add_row(&volc_ak.row);
+    volc.add_row(&volc_sk.row);
     providers_group.add(&volc);
 
-    let volc_ak = password_row("Access Key", "volcengine.access_key");
-    let volc_sk = password_row("Secret Key", "volcengine.secret_key");
-    let volc_region = adw::EntryRow::new();
-    volc_region.set_title("区域");
-    volc_region.set_text(&state.config.borrow().providers.volcengine.region);
-    providers_group.add(&volc_ak);
-    providers_group.add(&volc_sk);
-    providers_group.add(&volc_region);
+    let alibaba = adw::ExpanderRow::new();
+    alibaba.set_title("阿里云");
+    alibaba.set_subtitle("机器翻译通用版");
+    alibaba.set_show_enable_switch(true);
+    alibaba.set_enable_expansion(state.config.borrow().providers.alibaba.enabled);
+    alibaba.set_expanded(state.config.borrow().providers.alibaba.enabled);
+    alibaba.add_row(&ali_id.row);
+    alibaba.add_row(&ali_secret.row);
+    providers_group.add(&alibaba);
 
-    let tencent = adw::SwitchRow::new();
-    tencent.set_title("腾讯云");
-    tencent.set_subtitle("TMT 机器翻译");
-    tencent.set_active(state.config.borrow().providers.tencent.enabled);
-    providers_group.add(&tencent);
-
-    let tencent_id = password_row("SecretId", "tencent.secret_id");
-    let tencent_key = password_row("SecretKey", "tencent.secret_key");
-    let tencent_region = adw::EntryRow::new();
-    tencent_region.set_title("区域");
-    tencent_region.set_text(&state.config.borrow().providers.tencent.region);
-    providers_group.add(&tencent_id);
-    providers_group.add(&tencent_key);
-    providers_group.add(&tencent_region);
     page.add(&providers_group);
 
     let allow_file = if !secrets::keyring_available() {
         let security = adw::PreferencesGroup::new();
         security.set_title("密钥存储");
         let warning = gtk::Label::new(Some(
-            "系统密钥环不可用。如需保存新密钥，请在下方明确允许写入 0600 权限的本地文件。",
+            "系统密钥环不可用。如需保存新密钥，请明确允许写入 0600 权限的本地文件。",
         ));
         warning.set_wrap(true);
         warning.set_xalign(0.0);
@@ -748,194 +979,158 @@ fn build_settings(state: &Rc<UiState>) -> adw::ApplicationWindow {
     let toolbar = adw::ToolbarView::new();
     toolbar.add_top_bar(&header);
     toolbar.set_content(Some(&page));
-    window.set_content(Some(&toolbar));
+    let nav_page = adw::NavigationPage::new(&toolbar, "设置");
 
-    let key_controller = gtk::EventControllerKey::new();
-    let save_for_key = save.clone();
-    let window_for_key = window.clone();
-    key_controller.connect_key_pressed(move |_, keyval, _, modifier| {
-        let ctrl = modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK);
-        if ctrl && keyval.to_unicode() == Some('s') {
-            save_for_key.emit_clicked();
-            return glib::Propagation::Stop;
-        }
-        if keyval == gtk::gdk::Key::Escape {
-            window_for_key.close();
-            return glib::Propagation::Stop;
-        }
-        glib::Propagation::Proceed
+    let auto_for_spin = spin.clone();
+    let dirty_for_auto = dirty.clone();
+    auto.connect_active_notify(move |row| {
+        auto_for_spin.set_sensitive(row.is_active());
+        dirty_for_auto.set(true);
     });
-    window.add_controller(key_controller);
 
-    let window_for_cancel = window.clone();
-    cancel.connect_clicked(move |_| window_for_cancel.close());
+    let dirty_for_spin = dirty.clone();
+    spin.connect_value_notify(move |_| dirty_for_spin.set(true));
+
+    let dirty_for_bing = dirty.clone();
+    bing.connect_active_notify(move |_| dirty_for_bing.set(true));
+
+    let volc_for_toggle = volc.clone();
+    let dirty_for_volc = dirty.clone();
+    volc.connect_enable_expansion_notify(move |row| {
+        let enabled = row.enables_expansion();
+        volc_for_toggle.set_expanded(enabled);
+        dirty_for_volc.set(true);
+    });
+
+    let alibaba_for_toggle = alibaba.clone();
+    let dirty_for_alibaba = dirty.clone();
+    alibaba.connect_enable_expansion_notify(move |row| {
+        let enabled = row.enables_expansion();
+        alibaba_for_toggle.set_expanded(enabled);
+        dirty_for_alibaba.set(true);
+    });
+
+    if let Some(allow) = allow_file.as_ref() {
+        let dirty_for_allow = dirty.clone();
+        allow.connect_active_notify(move |_| dirty_for_allow.set(true));
+    }
+
+    let state_for_back = state.clone();
+    back.connect_clicked(move |_| state_for_back.request_close_settings());
 
     let state_for_save = state.clone();
-    let window_for_save = window.clone();
     let allow_file_for_save = allow_file.clone();
-    let status_group_for_save = status_group.clone();
-    let status_label_for_save = status_label.clone();
-    save.connect_clicked(move |_| {
+    let save: Rc<dyn Fn()> = Rc::new(move || {
         let mut config = state_for_save.config.borrow().clone();
         config.general.auto_translate = auto.is_active();
         config.general.debounce_ms = spin.value().round() as u64;
         config.providers.bing.enabled = bing.is_active();
-        config.providers.volcengine.enabled = volc.is_active();
-        config.providers.volcengine.region = volc_region.text().trim().to_string();
-        config.providers.tencent.enabled = tencent.is_active();
-        config.providers.tencent.region = tencent_region.text().trim().to_string();
+        config.providers.volcengine.enabled = volc.enables_expansion();
+        config.providers.alibaba.enabled = alibaba.enables_expansion();
 
         if !(200..=2000).contains(&config.general.debounce_ms) {
-            show_settings_error(
-                &status_group_for_save,
-                &status_label_for_save,
-                "延迟必须在 200–2000ms 之间",
-            );
+            show_settings_error(&status_group, &status_label, "延迟必须在 200–2000ms 之间");
             return;
         }
-        if config.providers.volcengine.enabled && config.providers.volcengine.region.is_empty() {
-            show_settings_error(
-                &status_group_for_save,
-                &status_label_for_save,
-                "火山引擎区域不能为空",
-            );
-            return;
-        }
-        if config.providers.tencent.enabled && config.providers.tencent.region.is_empty() {
-            show_settings_error(
-                &status_group_for_save,
-                &status_label_for_save,
-                "腾讯云区域不能为空",
-            );
-            return;
-        }
-
-        let volc_ak_value = volc_ak.text().to_string();
-        let volc_sk_value = volc_sk.text().to_string();
-        let tencent_id_value = tencent_id.text().to_string();
-        let tencent_key_value = tencent_key.text().to_string();
-        let credentials = state_for_save.credentials.borrow();
 
         if config.providers.volcengine.enabled {
-            if !secrets::env_is_set("volcengine.access_key")
-                && volc_ak_value.is_empty()
-                && credentials.volcengine.access_key.is_none()
-            {
-                show_settings_error(
-                    &status_group_for_save,
-                    &status_label_for_save,
-                    "请填写火山引擎 Access Key",
-                );
+            if !volc_ak.satisfied() {
+                show_settings_error(&status_group, &status_label, "请填写火山引擎 Access Key");
                 return;
             }
-            if !secrets::env_is_set("volcengine.secret_key")
-                && volc_sk_value.is_empty()
-                && credentials.volcengine.secret_key.is_none()
-            {
+            if !volc_sk.satisfied() {
+                show_settings_error(&status_group, &status_label, "请填写火山引擎 Secret Key");
+                return;
+            }
+        }
+        if config.providers.alibaba.enabled {
+            if !ali_id.satisfied() {
+                show_settings_error(&status_group, &status_label, "请填写阿里云 AccessKey ID");
+                return;
+            }
+            if !ali_secret.satisfied() {
                 show_settings_error(
-                    &status_group_for_save,
-                    &status_label_for_save,
-                    "请填写火山引擎 Secret Key",
+                    &status_group,
+                    &status_label,
+                    "请填写阿里云 AccessKey Secret",
                 );
                 return;
             }
         }
-        if config.providers.tencent.enabled {
-            if !secrets::env_is_set("tencent.secret_id")
-                && tencent_id_value.is_empty()
-                && credentials.tencent.secret_id.is_none()
-            {
-                show_settings_error(
-                    &status_group_for_save,
-                    &status_label_for_save,
-                    "请填写腾讯云 SecretId",
-                );
-                return;
-            }
-            if !secrets::env_is_set("tencent.secret_key")
-                && tencent_key_value.is_empty()
-                && credentials.tencent.secret_key.is_none()
-            {
-                show_settings_error(
-                    &status_group_for_save,
-                    &status_label_for_save,
-                    "请填写腾讯云 SecretKey",
-                );
-                return;
-            }
-        }
-        drop(credentials);
 
-        let has_new_secret = [
-            &volc_ak_value,
-            &volc_sk_value,
-            &tencent_id_value,
-            &tencent_key_value,
-        ]
-        .iter()
-        .any(|value| !value.is_empty());
-        if has_new_secret && !secrets::keyring_available() {
+        let has_new_key = [&volc_ak, &volc_sk, &ali_id, &ali_secret]
+            .iter()
+            .any(|key| key.is_new());
+        if has_new_key && !secrets::keyring_available() {
             let allowed = allow_file_for_save
                 .as_ref()
                 .is_some_and(|row| row.is_active());
             if !allowed {
                 show_settings_error(
-                    &status_group_for_save,
-                    &status_label_for_save,
+                    &status_group,
+                    &status_label,
                     "密钥环不可用，请先勾选“允许保存到本地文件”",
                 );
                 return;
             }
         }
 
-        for (field, value) in [
-            ("volcengine.access_key", volc_ak_value),
-            ("volcengine.secret_key", volc_sk_value),
-            ("tencent.secret_id", tencent_id_value),
-            ("tencent.secret_key", tencent_key_value),
-        ] {
-            if value.is_empty() {
-                continue;
-            }
-            if let Err(error) = secrets::store_secret(field, &value) {
-                show_settings_error(&status_group_for_save, &status_label_for_save, &error);
-                return;
+        for key in [&volc_ak, &volc_sk, &ali_id, &ali_secret] {
+            match key.action() {
+                KeyAction::Keep => {}
+                KeyAction::Delete => {
+                    if let Err(error) = secrets::delete_secret(key.field) {
+                        show_settings_error(&status_group, &status_label, &error);
+                        return;
+                    }
+                }
+                KeyAction::Set(value) => {
+                    if let Err(error) = secrets::store_secret(key.field, &value) {
+                        show_settings_error(&status_group, &status_label, &error);
+                        return;
+                    }
+                }
             }
         }
 
         if let Err(error) = config::save(&config) {
             show_settings_error(
-                &status_group_for_save,
-                &status_label_for_save,
+                &status_group,
+                &status_label,
                 &format!("保存配置失败：{error}"),
             );
             return;
         }
 
         state_for_save.reload();
-        window_for_save.close();
+        state_for_save.settings_dirty.set(false);
+        state_for_save.close_settings();
     });
 
-    window
-}
+    let save_for_button = save.clone();
+    save_button.connect_clicked(move |_| save_for_button());
 
-fn password_row(title: &str, field: &str) -> adw::PasswordEntryRow {
-    let row = adw::PasswordEntryRow::new();
-    row.set_text("");
-    if secrets::env_is_set(field) {
-        row.set_title(&format!("{title}（环境变量）"));
-        row.set_editable(false);
-        row.set_tooltip_text(Some("由环境变量提供，设置中不可修改"));
-    } else {
-        row.set_title(title);
-        row.set_tooltip_text(Some("已保存的密钥不会回显；留空表示不修改"));
-    }
-    row
+    (nav_page, save)
 }
 
 fn show_settings_error(group: &adw::PreferencesGroup, label: &gtk::Label, message: &str) {
     label.set_text(message);
     group.set_visible(true);
+}
+
+fn show_discard_dialog<W: IsA<gtk::Window>>(parent: &W, on_discard: impl FnOnce() + 'static) {
+    let parent = parent.upcast_ref::<gtk::Window>();
+    let dialog = adw::AlertDialog::new(Some("放弃未保存的修改？"), Some("设置尚未保存。"));
+    dialog.add_response("cancel", "取消");
+    dialog.add_response("discard", "放弃");
+    dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    dialog.choose(Some(parent), None::<&gio::Cancellable>, move |response| {
+        if response == "discard" {
+            on_discard();
+        }
+    });
 }
 
 fn apply_app_id(window: &adw::ApplicationWindow) {
@@ -950,7 +1145,7 @@ fn provider_label(id: &str) -> &'static str {
     match id {
         "bing" => "Bing",
         "volcengine" => "火山引擎",
-        "tencent" => "腾讯云",
+        "alibaba" => "阿里云",
         _ => "翻译源",
     }
 }

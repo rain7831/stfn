@@ -1,6 +1,6 @@
 # 命令行设计
 
-> 状态：待审核 · 目标版本：v0.1（`--speak` 为 v1.1）
+> 状态：已按 v0.1 实现校准（`--speak` 为 v1.1）
 > 关联：`README.md`、`architecture.md`、`providers.md`、`config.md`
 
 ## 1. 命令模型
@@ -13,7 +13,7 @@ stfn settings
 - 无 `TEXT` 且无子命令：打开 GUI。
 - `TEXT` 为普通参数：翻译并输出到 stdout。
 - `TEXT` 为 `-`：从 stdin 读取到 EOF。
-- `settings`：打开配置窗口。
+- `settings`：打开应用内设置页。
 - CLI 模式不初始化 GTK，不注册 GApplication。
 
 ## 2. 参数
@@ -21,7 +21,7 @@ stfn settings
 | 参数 | 取值 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `-t, --to` | `auto` / `zh` / `en` | 配置 `general.target` | 强制目标语言 |
-| `-s, --source` | `bing` / `volcengine` / `tencent` / `all`，可用逗号分隔 | 配置 `general.default_source` | 指定翻译源 |
+| `-s, --source` | `bing` / `volcengine` / `alibaba` / `all`，可用逗号分隔 | 配置 `general.default_source` | 指定翻译源 |
 | `--notify` | flag | off | 结果发送桌面通知，不输出 stdout |
 | `--speak` | flag | off | 翻译后朗读译文（v1.1） |
 | `--json` | flag | off | JSON 输出 |
@@ -33,7 +33,7 @@ stfn settings
 - `--notify` 与 `--json` 互斥，同时出现返回 2。
 - `--notify` 与 `--speak` 可以同时使用（先通知后朗读）。
 - `--json` 与 `--speak` 可以同时使用（JSON 到 stdout，音频为副作用）。
-- `--source all` 展开为所有已启用且凭据齐全的平台。
+- `--source all` 展开为所有已启用平台；缺凭据的平台以错误行展示。
 - 文本参数用单个空格连接；`-` 只能作为唯一的文本参数。
 - 单次输入上限 5000 字符；超出返回 2。
 
@@ -54,7 +54,7 @@ $ stfn hello
 $ stfn --source all hello
 [bing]
 你好
-[tencent]
+[alibaba]
 你好
 ```
 
@@ -79,7 +79,7 @@ $ stfn --source all hello
   ],
   "errors": [
     {
-      "provider": "tencent",
+      "provider": "alibaba",
       "kind": "auth",
       "message": "认证失败，请检查密钥"
     }
@@ -132,10 +132,10 @@ printf '你好' | stfn --json -
 ## 6. 配置与密钥
 
 - 配置读取顺序见 `config.md`。
-- 密钥优先级：环境变量 > Secret Service > `credentials.toml`。
+- 密钥优先级：环境变量 > Secret Service（`keyring`）> `credentials.toml`。
 - CLI 不修改配置，不写密钥。
 - `--source` 指定的平台若缺少凭据：该平台报错；若全部失败返回 1。
-- `--source all` 只包含凭据齐全的平台；一个都没有则返回 2。
+- `--source all` 只包含已启用且凭据齐全的平台；一个都没有则返回 2。
 
 ## 7. 示例
 
@@ -152,8 +152,8 @@ stfn hello
 # 强制目标英文
 stfn --to en 你好
 
-# 指定腾讯云
-stfn --source tencent hello
+# 指定阿里云
+stfn --source alibaba hello
 
 # 聚合所有可用平台，JSON 给脚本
 stfn --source all --json hello
@@ -170,7 +170,7 @@ echo "hello" | stfn --json -
 - 面向用户，一句话说明“发生了什么 + 怎么办”。
 - 不包含 URL、请求头、密钥、堆栈。
 - 示例：
-  - `认证失败，请在设置中检查腾讯云密钥`
+  - `认证失败，请在设置中检查阿里云 AccessKey`
   - `网络超时，请检查网络后重试`
   - `v1 仅支持中英互译`
   - `未启用任何翻译源，请打开设置`

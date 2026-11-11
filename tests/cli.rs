@@ -142,3 +142,72 @@ fn speak_is_v11() {
         .code(1)
         .stderr(predicate::str::contains("v1.1"));
 }
+
+#[test]
+fn alibaba_translates_with_mock() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(POST)
+            .path("/")
+            .body_contains("Action=TranslateGeneral")
+            .body_contains("AccessKeyId=test-id")
+            .body_contains("SourceText=hello")
+            .body_contains("Signature=");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(r#"{"Code":200,"Message":"success","RequestId":"test","Data":{"Translated":"你好","DetectedLanguage":"en","WordCount":"5"}}"#);
+    });
+    let temp = tempfile::tempdir().unwrap();
+
+    let output = Command::cargo_bin("stfn")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", temp.path())
+        .env("STFN_ALI_BASE_URL", server.base_url())
+        .env("STFN_ALI_ACCESS_KEY_ID", "test-id")
+        .env("STFN_ALI_ACCESS_KEY_SECRET", "test-secret")
+        .args(["--source", "alibaba", "--json", "hello"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["results"][0]["text"], "你好");
+}
+
+#[test]
+fn volcengine_uses_textlist_and_parses_detected_source() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(POST)
+            .path("/")
+            .body_contains("TextList")
+            .body_contains("TargetLanguage");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(r#"{"TranslationList":[{"Translation":"你好","DetectedSourceLanguage":"en"}],"ResponseMetadata":{"RequestId":"test"}}"#);
+    });
+    let temp = tempfile::tempdir().unwrap();
+
+    let output = Command::cargo_bin("stfn")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", temp.path())
+        .env("STFN_VOLC_BASE_URL", server.base_url())
+        .env("STFN_VOLC_ACCESS_KEY", "test-ak")
+        .env("STFN_VOLC_SECRET_KEY", "test-sk")
+        .args(["--source", "volcengine", "--json", "hello"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["results"][0]["text"], "你好");
+    assert_eq!(value["results"][0]["detected_source"], "en");
+}

@@ -59,7 +59,7 @@ pub enum SourceChoice {
     #[default]
     Bing,
     Volcengine,
-    Tencent,
+    Alibaba,
     All,
 }
 
@@ -71,7 +71,7 @@ impl<'de> Deserialize<'de> for SourceChoice {
         let s = String::deserialize(deserializer)?;
         Ok(match s.as_str() {
             "volcengine" => Self::Volcengine,
-            "tencent" => Self::Tencent,
+            "alibaba" => Self::Alibaba,
             "all" => Self::All,
             _ => Self::Bing,
         })
@@ -83,7 +83,7 @@ impl SourceChoice {
         match self {
             Self::Bing => "bing",
             Self::Volcengine => "volcengine",
-            Self::Tencent => "tencent",
+            Self::Alibaba => "alibaba",
             Self::All => "all",
         }
     }
@@ -114,7 +114,7 @@ impl Default for GeneralConfig {
 pub struct ProvidersConfig {
     pub bing: BingConfig,
     pub volcengine: VolcengineConfig,
-    pub tencent: TencentConfig,
+    pub alibaba: AlibabaConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,36 +129,16 @@ impl Default for BingConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct VolcengineConfig {
     pub enabled: bool,
-    pub region: String,
 }
 
-impl Default for VolcengineConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            region: "cn-north-1".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct TencentConfig {
+pub struct AlibabaConfig {
     pub enabled: bool,
-    pub region: String,
-}
-
-impl Default for TencentConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            region: "ap-guangzhou".to_string(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,8 +168,8 @@ impl Config {
         if self.providers.volcengine.enabled {
             ids.push("volcengine");
         }
-        if self.providers.tencent.enabled {
-            ids.push("tencent");
+        if self.providers.alibaba.enabled {
+            ids.push("alibaba");
         }
         ids
     }
@@ -265,13 +245,6 @@ fn validate(config: &mut Config, warnings: &mut Vec<String>) {
         ));
         config.general.debounce_ms = clamped;
     }
-
-    if config.providers.volcengine.region.trim().is_empty() {
-        config.providers.volcengine.region = "cn-north-1".to_string();
-    }
-    if config.providers.tencent.region.trim().is_empty() {
-        config.providers.tencent.region = "ap-guangzhou".to_string();
-    }
 }
 
 pub fn save(config: &Config) -> std::io::Result<()> {
@@ -302,16 +275,17 @@ pub fn save(config: &Config) -> std::io::Result<()> {
 
     let providers = ensure_table(&mut doc, "providers");
     providers.set_implicit(true);
+    providers.remove("tencent");
+
     let bing = ensure_subtable(providers, "bing");
     bing.insert("enabled", value(config.providers.bing.enabled));
 
     let volc = ensure_subtable(providers, "volcengine");
     volc.insert("enabled", value(config.providers.volcengine.enabled));
-    volc.insert("region", value(config.providers.volcengine.region.as_str()));
+    volc.remove("region");
 
-    let tencent = ensure_subtable(providers, "tencent");
-    tencent.insert("enabled", value(config.providers.tencent.enabled));
-    tencent.insert("region", value(config.providers.tencent.region.as_str()));
+    let alibaba = ensure_subtable(providers, "alibaba");
+    alibaba.insert("enabled", value(config.providers.alibaba.enabled));
 
     atomic_write(&path, doc.to_string().as_bytes(), 0o644)
 }

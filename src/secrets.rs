@@ -12,7 +12,7 @@ const SERVICE: &str = "stfn";
 #[derive(Debug, Clone, Default)]
 pub struct Credentials {
     pub volcengine: VolcCredentials,
-    pub tencent: TencentCredentials,
+    pub alibaba: AlibabaCredentials,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -22,9 +22,9 @@ pub struct VolcCredentials {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct TencentCredentials {
-    pub secret_id: Option<SecretString>,
-    pub secret_key: Option<SecretString>,
+pub struct AlibabaCredentials {
+    pub access_key_id: Option<SecretString>,
+    pub access_key_secret: Option<SecretString>,
 }
 
 impl Credentials {
@@ -43,11 +43,15 @@ impl Credentials {
         ))
     }
 
-    pub fn tencent_pair(&self) -> Option<(String, String)> {
+    pub fn alibaba_pair(&self) -> Option<(String, String)> {
         Some((
-            self.tencent.secret_id.as_ref()?.expose_secret().to_string(),
-            self.tencent
-                .secret_key
+            self.alibaba
+                .access_key_id
+                .as_ref()?
+                .expose_secret()
+                .to_string(),
+            self.alibaba
+                .access_key_secret
                 .as_ref()?
                 .expose_secret()
                 .to_string(),
@@ -69,8 +73,8 @@ pub fn env_var_for(field: &str) -> Option<&'static str> {
     match field {
         "volcengine.access_key" => Some("STFN_VOLC_ACCESS_KEY"),
         "volcengine.secret_key" => Some("STFN_VOLC_SECRET_KEY"),
-        "tencent.secret_id" => Some("STFN_TENCENT_SECRET_ID"),
-        "tencent.secret_key" => Some("STFN_TENCENT_SECRET_KEY"),
+        "alibaba.access_key_id" => Some("STFN_ALI_ACCESS_KEY_ID"),
+        "alibaba.access_key_secret" => Some("STFN_ALI_ACCESS_KEY_SECRET"),
         _ => None,
     }
 }
@@ -112,15 +116,15 @@ pub fn load() -> (Credentials, Vec<String>) {
         keyring_ok,
     );
     load_field(
-        &mut credentials.tencent.secret_id,
-        "tencent.secret_id",
-        &file.providers.tencent.secret_id,
+        &mut credentials.alibaba.access_key_id,
+        "alibaba.access_key_id",
+        &file.providers.alibaba.access_key_id,
         keyring_ok,
     );
     load_field(
-        &mut credentials.tencent.secret_key,
-        "tencent.secret_key",
-        &file.providers.tencent.secret_key,
+        &mut credentials.alibaba.access_key_secret,
+        "alibaba.access_key_secret",
+        &file.providers.alibaba.access_key_secret,
         keyring_ok,
     );
 
@@ -264,7 +268,7 @@ struct FileProviders {
     #[serde(default)]
     volcengine: FileVolcengine,
     #[serde(default)]
-    tencent: FileTencent,
+    alibaba: FileAlibaba,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -274,9 +278,9 @@ struct FileVolcengine {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct FileTencent {
-    secret_id: Option<String>,
-    secret_key: Option<String>,
+struct FileAlibaba {
+    access_key_id: Option<String>,
+    access_key_secret: Option<String>,
 }
 
 fn load_file(warnings: &mut Vec<String>) -> FileCredentials {

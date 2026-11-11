@@ -26,20 +26,22 @@
 - 单个平台失败不影响其他行，该行显示错误并支持重试。
 - 结果文本可选中复制，每行结果提供复制按钮；Esc 清空输入，Ctrl+L 聚焦输入框。
 
-### 配置窗口
+### 设置页
 
-- 主窗口齿轮按钮，或 `stfn settings` 打开。
+- 主窗口齿轮按钮，或 `stfn settings` 打开；设置页在主窗口内切换，不新开浮动窗口。
 - 自动翻译开关；开启时可调输入延迟（200–2000ms，默认 300ms）。
-- Bing / 火山引擎 / 腾讯云的启用状态、区域与密钥。
-- 密钥默认存入系统 Secret Service（gnome-keyring 等）；不可用时退回 `0600` 权限的本地凭据文件。
+- Bing / 火山引擎 / 阿里云的启用状态与密钥；密钥配置在对应引擎开关打开后才展开。
+- 已保存的密钥显示为 `******`：不修改则保留，清空并保存则删除，输入新值则替换。
+- 修改未保存就返回或退出，会弹出确认框。
+- 密钥默认存入系统 Secret Service（gnome-keyring 等）；不可用时需明确允许后写入 `0600` 凭据文件。
 - 环境变量优先级最高；来自环境变量的密钥在 UI 中只读。
 - 密钥输入默认掩码，不写日志、不打印、不进入桌面通知。
 
 ### 翻译源
 
 - **Bing**：默认，免 key（非官方接口，可能随时失效）。
-- **火山引擎机器翻译**：配置 AK/SK 后启用。
-- **腾讯云 TMT**：配置 SecretId / SecretKey 后启用。
+- **火山引擎机器翻译**：配置 Access Key / Secret Key 后启用。
+- **阿里云机器翻译通用版**：配置 AccessKey ID / AccessKey Secret 后启用。
 - 多平台并行请求，结果独立渲染。
 
 ### 语言方向
@@ -55,7 +57,7 @@ GUI 与 CLI 共用同一套 provider 层，不做第二套逻辑。
 | 命令 | 行为 |
 | --- | --- |
 | `stfn` | 打开翻译窗口；已在运行则聚焦已有窗口 |
-| `stfn settings` | 打开配置窗口 |
+| `stfn settings` | 打开应用内设置页 |
 | `stfn hello` | 翻译并输出到 stdout |
 | `stfn --notify hello` | 翻译结果发送到桌面通知 |
 | `stfn --speak hello` | 翻译并朗读译文（v1.1） |
@@ -75,14 +77,14 @@ GUI 与 CLI 共用同一套 provider 层，不做第二套逻辑。
 
 ## 平台能力矩阵
 
-| 能力 | Bing（默认） | 火山引擎 | 腾讯云 TMT |
+| 能力 | Bing（默认） | 火山引擎 | 阿里云 |
 | --- | --- | --- | --- |
-| 凭据 | 无需 | AK/SK | SecretId / Key |
+| 凭据 | 无需 | Access Key / Secret Key | AccessKey ID / Secret |
 | 中→英 / 英→中 | ✅ | ✅ | ✅ |
-| 自动识别源语言 | ✅ | 待实测 | ✅ |
+| 自动识别源语言 | ✅ | ✅ | ✅ |
 | 音标 | v1.1 再评估 | ❌ | ❌ |
 | 朗读 | v1.1（Edge TTS，非官方） | 需另开语音合成 | 需另开语音合成 |
-| 成本 | 免费（非官方） | 按量 / 有免费额度 | 有每月免费额度 |
+| 成本 | 免费（非官方） | 按量 / 有免费额度 | 每月有免费额度 |
 
 > Bing 为社区常用的非官方接口，无 SLA 保证；这是"默认零配置"的代价，README 与 UI 中都要说明。
 
@@ -108,19 +110,17 @@ enabled = true
 
 [providers.volcengine]
 enabled = false
-region = "cn-north-1"
 
-[providers.tencent]
+[providers.alibaba]
 enabled = false
-region = "ap-guangzhou"
 ```
 
-密钥不写在 `config.toml`：设置窗口会写入 Secret Service，或回退到 `credentials.toml`。
+密钥不写在 `config.toml`：设置页会写入 Secret Service，或回退到 `credentials.toml`。
 
-- 只需填写要用的平台；`enabled` 为 true 且凭据齐全才会出现在结果区。
+- 只需填写要用的平台；`enabled` 为 true 才会出现在结果区，缺凭据时该行提示。
 - 启用多个平台时 GUI 全部展示；`default_source` 只决定 CLI 未指定 `--source` 时的默认源。
-- 凭据可用环境变量覆盖（如 `STFN_VOLC_ACCESS_KEY`），推荐放环境变量以免明文落盘。
-- 配置窗口直接改写 `config.toml`（保留注释）与凭据存储，保存后立即生效，无需重启。
+- 凭据可用环境变量覆盖（如 `STFN_VOLC_ACCESS_KEY`、`STFN_ALI_ACCESS_KEY_ID`、`STFN_ALI_ACCESS_KEY_SECRET`），推荐放环境变量以免明文落盘。
+- 设置页直接改写 `config.toml`（保留注释）与凭据存储，保存后立即生效，无需重启。
 - 密钥优先写 Secret Service；不可用时写 `$XDG_CONFIG_HOME/stfn/credentials.toml`（权限 0600）。
 
 ## niri 集成
@@ -158,7 +158,7 @@ window-rule {
 - GUI：GTK4 + libadwaita（gtk4-rs / libadwaita-rs），优先保证 fcitx5 / text-input-v3 输入体验
 - HTTP：reqwest + rustls，异步运行时 tokio
 - 单实例：GApplication 唯一实例，重复执行 `stfn` 只聚焦已有窗口
-- 密钥：Secret Service（oo7/zbus）优先，`0600` 凭据文件兜底
+- 密钥：Secret Service（keyring/zbus）优先，`0600` 凭据文件兜底
 - 通知：D-Bus `org.freedesktop.Notifications`
 - 音频：PipeWire
 
@@ -166,7 +166,7 @@ window-rule {
 
 - `architecture.md` —— 进程模型、单实例、模块划分
 - `ui.md` —— 主窗口布局、交互、输入法
-- `settings.md` —— 配置窗口、密钥存储与校验
+- `settings.md` —— 应用内设置页、密钥存储与校验
 - `providers.md` —— 各翻译平台接口与能力降级
 - `cli.md` —— 命令行参数与输出格式
 - `config.md` —— 配置项与环境变量
@@ -181,7 +181,7 @@ cargo install --path .   # 从源码安装
 
 ## 开发状态
 
-v0.1 目标：翻译窗口 + 配置窗口 + Bing + CLI 回显 / 通知 + 配置与密钥存储。
+v0.1 目标：翻译窗口 + 应用内设置 + Bing/火山/阿里 + CLI 回显 / 通知 + 配置与密钥存储。
 后续版本：朗读、更多平台、快捷键与交互打磨。
 
 ## License

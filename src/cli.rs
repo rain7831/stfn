@@ -37,7 +37,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// 打开配置窗口
+    /// 打开应用内设置页
     Settings,
 }
 
@@ -278,7 +278,7 @@ fn resolve_sources(cli: &Cli, config: &Config) -> Result<Vec<&'static str>, Stri
                 }
                 "bing" => push_unique(&mut ids, "bing"),
                 "volcengine" => push_unique(&mut ids, "volcengine"),
-                "tencent" => push_unique(&mut ids, "tencent"),
+                "alibaba" => push_unique(&mut ids, "alibaba"),
                 other => return Err(format!("未知翻译源：{other}")),
             }
         }
@@ -291,7 +291,7 @@ fn resolve_sources(cli: &Cli, config: &Config) -> Result<Vec<&'static str>, Stri
     let ids = match config.general.default_source {
         SourceChoice::Bing => vec!["bing"],
         SourceChoice::Volcengine => vec!["volcengine"],
-        SourceChoice::Tencent => vec!["tencent"],
+        SourceChoice::Alibaba => vec!["alibaba"],
         SourceChoice::All => config.enabled_provider_ids(),
     };
     if ids.is_empty() {

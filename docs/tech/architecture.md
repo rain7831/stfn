@@ -1,6 +1,6 @@
 # STFN 架构设计
 
-> 状态：待审核 · 目标版本：v0.1
+> 状态：已按 v0.1 实现校准
 > 关联：`README.md`、`ui.md`、`settings.md`、`providers.md`、`cli.md`、`config.md`
 
 ## 1. 目标与约束
@@ -16,13 +16,13 @@
 | 模式 | 触发 | 行为 |
 | --- | --- | --- |
 | GUI | `stfn` | 启动 GTK4 主窗口；单实例 |
-| Settings | `stfn settings`、主窗口齿轮、`Ctrl+,` | 在 GUI 进程内打开配置窗口 |
+| Settings | `stfn settings`、主窗口齿轮、`Ctrl+,` | 在主窗口内 push 设置页（AdwNavigationView） |
 | CLI | `stfn <text>`、`stfn -` | 不初始化 GTK；翻译后输出并退出 |
 
 - 无常驻 daemon；关闭主窗口即退出。
 - GUI 使用 `GtkApplication` 保证单实例：重复 `stfn` 通过 `activate` 聚焦已有窗口。
 - GApplication ID 使用 `dev.stfn.Stfn`；窗口 realize 后调用 `gdk_wayland_toplevel_set_application_id(toplevel, "stfn")`，使 niri 的 `match app-id="^stfn$"` 生效。
-- `stfn settings` 在 GUI 未运行时先启动 GUI，再打开设置窗口；已打开则聚焦。
+- `stfn settings` 在 GUI 未运行时先启动 GUI，再切到设置页；已打开则保持当前页。
 - CLI 进程不注册 GApplication，避免与 GUI 抢单实例。
 
 ## 3. 启动流程
@@ -32,7 +32,7 @@
 1. 解析 argv；若是 CLI 形态直接走 CLI。
 2. 读取 `config.toml` 与凭据（见 `config.md`）。
 3. 初始化 GTK / libadwaita，创建 `StfnApplication`。
-4. 构建主窗口（见 `ui.md`），按启用平台创建结果行。
+4. 构建主窗口与 `AdwNavigationView`（见 `ui.md`），按启用平台创建结果行。
 5. 懒加载后台 runtime（首次翻译时才启动）。
 6. 聚焦输入框。
 
@@ -54,9 +54,9 @@
 | `app` | GtkApplication、单实例、窗口生命周期 | gtk4, libadwaita |
 | `ui` | 主窗口、结果行、设置窗口 | gtk4, libadwaita |
 | `core` | 语言检测、去抖、请求编排、缓存 | tokio, lru |
-| `providers` | Bing / 火山 / 腾讯适配器、统一 trait | reqwest, hmac, sha2 |
+| `providers` | Bing / 火山 / 阿里适配器、统一 trait | reqwest, hmac, sha2, sha1 |
 | `config` | 配置读写、校验、迁移 | serde, toml_edit |
-| `secrets` | Secret Service / 0600 文件 | oo7, zeroize |
+| `secrets` | Secret Service / 0600 文件 | keyring, zeroize |
 | `tts` | 朗读（v1.1） | rodio |
 | `platform` | niri / Wayland 细节（app-id） | gdk4-wayland |
 
@@ -135,11 +135,12 @@ struct ProviderError {
 
 ## 9. 安全与隐私
 
-- 密钥优先级：环境变量 > Secret Service > `credentials.toml`（0600）。
+- 密钥优先级：环境变量 > Secret Service（`keyring` crate）> `credentials.toml`（0600）。
 - 日志只记录 provider、状态码、耗时；不记录请求 / 响应正文、Authorization、密钥。
 - 不落盘翻译内容；缓存仅内存，退出即清。
 - 所有云 API 走 TLS（rustls）。
 - `--notify` 会把译文交给桌面通知服务，属于用户显式操作。
+- 设置页修改未保存时返回/退出会弹确认；密钥在 UI 中显示为 `******`，清空保存才删除。
 
 ## 10. 依赖清单
 
@@ -150,8 +151,8 @@ struct ProviderError {
 | HTTP | `reqwest`（`rustls-tls`, `json`） |
 | 序列化 | `serde`, `toml`, `toml_edit` |
 | 参数 | `clap`（derive） |
-| 签名 | `hmac`, `sha2`, `hex`, `base64` |
-| 密钥 | `oo7` 或 `secret-service`（zbus）, `zeroize`, `secrecy` |
+| 签名 | `hmac`, `sha2`, `sha1`, `hex`, `base64`, `uuid` |
+| 密钥 | `keyring`（zbus Secret Service）, `zeroize`, `secrecy` |
 | 通知 | `notify-rust` |
 | 日志 | `tracing`, `tracing-subscriber` |
 | 缓存 | `lru` |
@@ -182,9 +183,9 @@ struct ProviderError {
 
 | 风险 | 影响 | 处理 |
 | --- | --- | --- |
-| Bing 非官方接口变更 | 默认源失效 | provider 隔离；UI 提示；可切换云厂商 |
+| Bing 网页会话结构变更 | 默认源失效 | 会话解析失败时提示；可切换云厂商 |
 | GTK4 app-id / 焦点细节 | niri 规则不生效 | 用 `gdk_wayland_toplevel_set_application_id`；实测 |
 | preedit 触发 changed | 拼音被翻译 | 实测 fcitx5；必要时监听 IM context |
 | Secret Service 不可用 / 锁定 | 密钥无法保存 | 明确提示；用户确认后回退 0600 |
-| 云厂商签名实现偏差 | 401 | 用官方示例做 fixture 对照；实现前复核文档 |
+| 云厂商签名实现偏差 | 401 | 火山已实测；阿里用官方参数 + mock 测试，真实密钥待验 |
 | 朗读接口非官方 | v1.1 不稳定 | 标记实验性；失败不阻塞翻译 |
