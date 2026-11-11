@@ -13,7 +13,7 @@ use crate::secrets::{self, Credentials};
 use crate::translate::{self, ProviderError, TranslateCache, TranslateOutput, TranslateRequest};
 
 const SENTINEL: &str = "******";
-const ROW_INSET: i32 = 10;
+const ROW_INSET: i32 = 12;
 
 enum UiEvent {
     Result {
@@ -322,7 +322,6 @@ struct UiState {
 
 impl UiState {
     fn new(app: &adw::Application) -> Rc<Self> {
-        gtk::Window::set_default_icon_name("stfn");
         let loaded = config::load();
         let (credentials, _) = secrets::load();
 
@@ -333,7 +332,6 @@ impl UiState {
             .default_height(640)
             .build();
         window.set_size_request(320, 400);
-        window.set_icon_name(Some("stfn"));
 
         let window_for_realize = window.clone();
         window.connect_realize(move |_| apply_app_id(&window_for_realize));
@@ -357,13 +355,14 @@ impl UiState {
         set_text_font(&input, 15);
         input.set_margin_top(12);
         input.set_margin_bottom(12);
-        input.set_margin_start(10);
-        input.set_margin_end(10);
+        input.set_margin_start(12);
+        input.set_margin_end(12);
 
         let input_scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
-            .max_content_height(180)
+            .min_content_height(140)
+            .max_content_height(260)
             .propagate_natural_height(true)
             .has_frame(false)
             .child(&input)
@@ -384,8 +383,8 @@ impl UiState {
         input_card.append(&input_scrolled);
 
         let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        bottom.set_margin_start(10);
-        bottom.set_margin_end(10);
+        bottom.set_margin_start(12);
+        bottom.set_margin_end(12);
         bottom.append(&direction);
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
@@ -401,8 +400,8 @@ impl UiState {
         set_label_font(&status, 13, false);
         status.set_wrap(true);
         status.set_xalign(0.0);
-        status.set_margin_start(10);
-        status.set_margin_end(10);
+        status.set_margin_start(12);
+        status.set_margin_end(12);
         status.add_css_class("error");
         status.set_visible(false);
 
@@ -417,16 +416,21 @@ impl UiState {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 10);
         content.set_margin_top(14);
         content.set_margin_bottom(14);
-        content.set_margin_start(14);
-        content.set_margin_end(14);
+        content.set_margin_start(24);
+        content.set_margin_end(24);
         content.append(&input_card);
         content.append(&divider);
         content.append(&status);
         content.append(&results_scrolled);
 
+        let clamp = adw::Clamp::new();
+        clamp.set_maximum_size(640);
+        clamp.set_tightening_threshold(480);
+        clamp.set_child(Some(&content));
+
         let main_toolbar = adw::ToolbarView::new();
         main_toolbar.add_top_bar(&header);
-        main_toolbar.set_content(Some(&content));
+        main_toolbar.set_content(Some(&clamp));
         let main_page = adw::NavigationPage::new(&main_toolbar, "STFN");
 
         let nav = adw::NavigationView::new();
