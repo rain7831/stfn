@@ -21,7 +21,7 @@ version = 1
 
 [general]
 auto_translate = true
-debounce_ms = 300
+debounce_ms = 700
 target = "auto"            # auto | zh | en
 default_source = "bing"    # bing | volcengine | alibaba | all
 
@@ -44,7 +44,7 @@ enabled = false
 | --- | --- | --- |
 | `version` | `1` | 配置格式版本 |
 | `general.auto_translate` | `true` | 输入停止后自动翻译 |
-| `general.debounce_ms` | `300` | 200–2000 |
+| `general.debounce_ms` | `700` | 200–2000 |
 | `general.target` | `"auto"` | `auto` 时按检测结果决定 |
 | `general.default_source` | `"bing"` | CLI 与 GUI 的默认源 |
 | `providers.bing.enabled` | `true` | 无密钥 |
@@ -181,7 +181,7 @@ version = 1
 
 [general]
 auto_translate = false
-debounce_ms = 500
+debounce_ms = 700
 target = "zh"
 default_source = "bing"
 

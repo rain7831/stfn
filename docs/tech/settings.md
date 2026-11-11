@@ -20,7 +20,7 @@
 │  翻译                                      │
 │  ┌──────────────────────────────────────┐  │
 │  │ 自动翻译                      [开关] │  │
-│  │ 延迟                      300 ms     │  │
+│  │ 延迟                      700 ms     │  │
 │  └──────────────────────────────────────┘  │
 │                                            │
 │  翻译源                                    │
@@ -46,7 +46,7 @@
 | 字段 | 控件 | 默认 | 规则 |
 | --- | --- | --- | --- |
 | `general.auto_translate` | `AdwSwitchRow` | `true` | 关闭后主窗口显示“翻译”按钮 |
-| `general.debounce_ms` | `AdwSpinRow` | `300` | 200–2000，步进 50 |
+| `general.debounce_ms` | `AdwSpinRow` | `700` | 200–2000，步进 50 |
 | `providers.bing.enabled` | `AdwSwitchRow` | `true` | 无密钥 |
 | `providers.volcengine.enabled` | `AdwExpanderRow` 开关 | `false` | 开启时要求 Access Key / Secret Key |
 | `providers.alibaba.enabled` | `AdwExpanderRow` 开关 | `false` | 开启时要求 AccessKey ID / Secret |

@@ -102,7 +102,7 @@ impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             auto_translate: true,
-            debounce_ms: 300,
+            debounce_ms: 700,
             target: Target::Auto,
             default_source: SourceChoice::Bing,
         }
