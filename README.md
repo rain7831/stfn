@@ -15,14 +15,15 @@
 ### 翻译窗口
 
 - 单窗口、单列布局：第一行是多行输入框，之后每个已配置的翻译平台占一行，纵向排列。
-- 关闭窗口即退出，不常驻托盘；重复执行 `stfn` 只聚焦已有窗口。
-- 输入框支持多行；Enter 换行，Ctrl+Enter 立即翻译。
+- 每次启动都是独立进程/窗口，关闭即退出，不常驻托盘，也不再复用已有窗口。
+- 输入框支持多行；Enter 换行，Ctrl+Enter 立即翻译；打开窗口后输入框自动聚焦。
 - 输入停顿 700ms 后自动翻译（可配置），无需按回车。
 - 输入法组合（preedit）期间不触发；候选词上屏后才开始计时，避免把拼音当输入。
 - 中文输入依赖 fcitx5 / ibus 正常显示候选框（text-input-v3）。
 - 输入框所在行显示检测到的方向（如 EN → 中）。
 - 结果行按配置顺序展示，只显示已配置且可用的平台；未启用的平台不占位。
-- 英文音标与发音（v0.2 规划）：仅单词级，具体交互见 `docs/tech/v0.2-plan.md`。
+- 英文音标与发音：仅单词级。英译中显示在输入框下方；中译英按每个平台的译文显示在厂商标题下，不同平台的音标互不影响。
+- 词典没有真人音频时用 Edge TTS 兜底；查不到或不是单词时不占位，不显示拼音。
 - 单个平台失败不影响其他行，该行显示错误并支持重试。
 - 结果文本可选中复制，每行结果提供复制按钮；Esc 清空输入，Ctrl+L 聚焦输入框。
 
@@ -33,6 +34,7 @@
 - Bing / 火山引擎 / 阿里云的启用状态与密钥；密钥配置在对应引擎开关打开后才展开。
 - 已保存的密钥显示为 `******`：不修改则保留，清空并保存则删除，输入新值则替换。
 - 修改未保存就返回或退出，会弹出确认框。
+- “数据来源”小组说明音标/音频由 dictionaryapi.dev 与 Edge TTS 提供。
 - 密钥默认存入系统 Secret Service（gnome-keyring 等）；不可用时需明确允许后写入 `0600` 凭据文件。
 - 环境变量优先级最高；来自环境变量的密钥在 UI 中只读。
 - 密钥输入默认掩码，不写日志、不打印、不进入桌面通知。
@@ -56,17 +58,20 @@ GUI 与 CLI 共用同一套 provider 层，不做第二套逻辑。
 
 | 命令 | 行为 |
 | --- | --- |
-| `stfn` | 打开翻译窗口；已在运行则聚焦已有窗口 |
-| `stfn settings` | 打开应用内设置页 |
+| `stfn` | 新进程打开翻译窗口 |
+| `stfn settings` | 新进程打开主窗口并进入设置页 |
+| `stfn selection` | 新进程读取 primary selection，自动填入并翻译 |
 | `stfn hello` | 翻译并输出到 stdout |
 | `stfn --notify hello` | 翻译结果发送到桌面通知 |
-| `stfn --speak hello` | 翻译并朗读译文（v0.2 规划） |
+| `stfn --speak 你好` | 翻译后朗读英文译文，默认 US 音色 |
 | `stfn --json hello` | JSON 输出，便于脚本使用 |
 | `stfn --to en hello` | 强制目标语言 |
 | `stfn --source all hello` | 指定翻译源 / 聚合全部可用源 |
 | `echo hello \| stfn -` | 从 stdin 读取 |
 
 - 退出码：0 成功，非 0 失败；`--json` 字段保持稳定，便于脚本消费。
+- `--json` 的 `phonetic` 对英文单词填写词典 IPA，未命中为 `null`。
+- `--speak` 只朗读英文译文；中文目标返回 1，TTS 不可用时提示并返回 1。
 - `--source` 不指定时使用配置里的 `default_source`。
 
 ### 性能与依赖
@@ -82,8 +87,8 @@ GUI 与 CLI 共用同一套 provider 层，不做第二套逻辑。
 | 凭据 | 无需 | Access Key / Secret Key | AccessKey ID / Secret |
 | 中→英 / 英→中 | ✅ | ✅ | ✅ |
 | 自动识别源语言 | ✅ | ✅ | ✅ |
-| 音标 | v0.2 规划（英文单词） | ❌ | ❌ |
-| 朗读 | v0.2 规划（词典音频 / Edge TTS） | 需另开语音合成 | 需另开语音合成 |
+| 音标 | ✅ 应用侧词典后处理（英文单词） | ❌（后处理共享） | ❌（后处理共享） |
+| 朗读 | ✅ 词典音频 / Edge TTS 兜底 | 需另开语音合成 | 需另开语音合成 |
 | 成本 | 免费（非官方） | 按量 / 有免费额度 | 每月有免费额度 |
 
 > Bing 为社区常用的非官方接口，无 SLA 保证；这是"默认零配置"的代价，README 与 UI 中都要说明。
@@ -92,6 +97,7 @@ GUI 与 CLI 共用同一套 provider 层，不做第二套逻辑。
 
 - 不保存输入历史，不落盘翻译内容。
 - 输入只发送到当前启用的翻译平台；未启用的平台不会收到请求。
+- 英文单词查询会发送给 dictionaryapi.dev；播放兜底会把待朗读文本发送给 Edge TTS。两者都不记录、不遥测。
 - 不做遥测、不内置统计上报。
 
 ## 配置
@@ -130,6 +136,7 @@ enabled = false
 ```kdl
 binds {
     Mod+Shift+T { spawn "stfn"; }
+    Mod+Shift+Y { spawn "stfn" "selection"; }
 }
 
 window-rule {
@@ -137,6 +144,8 @@ window-rule {
     default-column-width { proportion 0.25; }
 }
 ```
+
+选中任意应用里的文本后按 `Mod+Shift+Y`，新窗口会自动填入并翻译该文本。只读取 Wayland 的 primary selection，不覆盖普通剪贴板；选区为空或超过 5000 字符时只给出提示。
 
 初始宽度取屏幕的 1/4，翻译工具不需要占满整个工作区；需要时用 `Mod+R` 或拖拽调宽。
 
@@ -157,7 +166,7 @@ window-rule {
 - 语言：Rust
 - GUI：GTK4 + libadwaita（gtk4-rs / libadwaita-rs），优先保证 fcitx5 / text-input-v3 输入体验
 - HTTP：reqwest + rustls，异步运行时 tokio
-- 进程模型：v0.1 使用 GApplication 单实例；v0.2 规划改为每次启动新进程
+- 进程模型：每次启动新进程/独立窗口（GApplication `NON_UNIQUE`），不做单实例转发
 - 密钥：Secret Service（keyring/zbus）优先，`0600` 凭据文件兜底
 - 通知：D-Bus `org.freedesktop.Notifications`
 - 音频：PipeWire
@@ -184,11 +193,15 @@ cargo install --path .   # 从源码安装
 
 ## 开发状态
 
-v0.1.0 已完成：翻译窗口 + 应用内设置 + Bing / 火山 / 阿里 + CLI 回显 / 通知 + 配置与密钥存储。
+v0.1.0 已完成：翻译窗口 + 应用内设置 + Bing / 火山 / 阿里 + CLI 回显 / 通知 + 配置与密钥存储。版本总结见 `docs/versions/v0.1.0.md`。
 
-版本总结见 `docs/versions/v0.1.0.md`。
+v0.2 已实现：英文单词音标/发音（词典 + Edge TTS）、系统主题审计、启动/选区注入聚焦、niri 选区翻译，并改为每次启动新进程；CLI 增加 `stfn selection`、`--speak` 与 JSON `phonetic`。设计见 `docs/tech/pronunciation.md`、`selection.md`、`v0.2-plan.md`。
 
-v0.2 规划中：英文音标/发音、系统主题、输入聚焦、niri 选区翻译，并改为每次启动新进程。详见 `docs/tech/v0.2-plan.md`。
+## 数据来源
+
+- 英文音标与真人发音来自 [dictionaryapi.dev](https://dictionaryapi.dev/)，数据采用 CC BY-SA 3.0，音频为 CC BY / BY-SA。
+- 词典没有真人音频时，使用 Edge TTS（非官方 Microsoft Read Aloud 接口）兜底；音色会优先使用 Edge 当前提供的 en-US / en-GB 语音。
+- Edge TTS 与 dictionaryapi.dev 都是在线服务，查询会把单词或待朗读文本发送给对应服务；STFN 不记录、不缓存到磁盘。
 
 ## License
 
