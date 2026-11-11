@@ -38,7 +38,7 @@ impl ProviderRow {
     fn new(id: &'static str, on_retry: Rc<dyn Fn()>) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
         root.add_css_class("card");
-        root.set_vexpand(true);
+        root.set_size_request(-1, 100);
         root.set_margin_bottom(10);
 
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -86,8 +86,6 @@ impl ProviderRow {
         body.set_selectable(true);
         body.set_xalign(0.0);
         body.set_hexpand(true);
-        body.set_vexpand(true);
-        body.set_valign(gtk::Align::Start);
         body.set_margin_start(12);
         body.set_margin_end(12);
         body.set_margin_bottom(12);
@@ -384,8 +382,9 @@ impl UiState {
         translate_button.add_css_class("suggested-action");
         translate_button.set_visible(false);
 
-        let input_title = gtk::Label::new(Some("输入"));
-        set_label_font(&input_title, 15, true);
+        let input_title = gtk::Label::new(Some("输入中文或英文，自动翻译"));
+        set_label_font(&input_title, 14, false);
+        input_title.set_xalign(0.0);
         let input_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         input_header.append(&input_title);
         let input_header_spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -420,11 +419,8 @@ impl UiState {
         results_title.set_xalign(0.0);
 
         let results_box = gtk::Box::new(gtk::Orientation::Vertical, 10);
-        results_box.set_homogeneous(true);
-        results_box.set_vexpand(true);
 
         let results_section = gtk::Box::new(gtk::Orientation::Vertical, 10);
-        results_section.set_vexpand(true);
         results_section.append(&results_title);
         results_section.append(&results_box);
 
