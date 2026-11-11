@@ -22,7 +22,7 @@
 - 中文输入依赖 fcitx5 / ibus 正常显示候选框（text-input-v3）。
 - 输入框所在行显示检测到的方向（如 EN → 中）。
 - 结果行按配置顺序展示，只显示已配置且可用的平台；未启用的平台不占位。
-- 音标与朗读（v1.1）：数据存在时才显示，不占位；v1 只做文本翻译。
+- 英文音标与发音（v0.2 规划）：仅单词级，具体交互见 `docs/tech/v0.2-plan.md`。
 - 单个平台失败不影响其他行，该行显示错误并支持重试。
 - 结果文本可选中复制，每行结果提供复制按钮；Esc 清空输入，Ctrl+L 聚焦输入框。
 
@@ -60,7 +60,7 @@ GUI 与 CLI 共用同一套 provider 层，不做第二套逻辑。
 | `stfn settings` | 打开应用内设置页 |
 | `stfn hello` | 翻译并输出到 stdout |
 | `stfn --notify hello` | 翻译结果发送到桌面通知 |
-| `stfn --speak hello` | 翻译并朗读译文（v1.1） |
+| `stfn --speak hello` | 翻译并朗读译文（v0.2 规划） |
 | `stfn --json hello` | JSON 输出，便于脚本使用 |
 | `stfn --to en hello` | 强制目标语言 |
 | `stfn --source all hello` | 指定翻译源 / 聚合全部可用源 |
@@ -82,8 +82,8 @@ GUI 与 CLI 共用同一套 provider 层，不做第二套逻辑。
 | 凭据 | 无需 | Access Key / Secret Key | AccessKey ID / Secret |
 | 中→英 / 英→中 | ✅ | ✅ | ✅ |
 | 自动识别源语言 | ✅ | ✅ | ✅ |
-| 音标 | v1.1 再评估 | ❌ | ❌ |
-| 朗读 | v1.1（Edge TTS，非官方） | 需另开语音合成 | 需另开语音合成 |
+| 音标 | v0.2 规划（英文单词） | ❌ | ❌ |
+| 朗读 | v0.2 规划（词典音频 / Edge TTS） | 需另开语音合成 | 需另开语音合成 |
 | 成本 | 免费（非官方） | 按量 / 有免费额度 | 每月有免费额度 |
 
 > Bing 为社区常用的非官方接口，无 SLA 保证；这是"默认零配置"的代价，README 与 UI 中都要说明。
@@ -183,7 +183,9 @@ cargo install --path .   # 从源码安装
 
 v0.1.0 已完成：翻译窗口 + 应用内设置 + Bing / 火山 / 阿里 + CLI 回显 / 通知 + 配置与密钥存储。
 
-版本总结见 `docs/versions/v0.1.0.md`。后续版本：朗读、更多平台、快捷键与交互打磨。
+版本总结见 `docs/versions/v0.1.0.md`。
+
+v0.2 规划中：英文音标/发音、系统主题、输入聚焦、niri 选区翻译。详见 `docs/tech/v0.2-plan.md`。
 
 ## License
 
