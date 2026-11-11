@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=STFN
+GenericName=Translator
+Comment=Simple Translator For Niri
+Exec=stfn
+Icon=stfn
+Terminal=false
+Categories=Utility;Translation;
+StartupWMClass=stfn
+Keywords=translate;translation;niri;

@@ -47,7 +47,7 @@ impl ProviderRow {
         header.append(&provider_logo(id));
 
         let name = gtk::Label::new(Some(provider_label(id)));
-        set_label_font(&name, 15, true);
+        set_label_font(&name, 14, true);
         name.set_xalign(0.0);
         header.append(&name);
 
@@ -56,7 +56,7 @@ impl ProviderRow {
         header.append(&spacer);
 
         let phonetic = gtk::Label::new(None);
-        set_label_font(&phonetic, 13, false);
+        set_label_font(&phonetic, 12, false);
         phonetic.add_css_class("dim-label");
         phonetic.set_visible(false);
         header.append(&phonetic);
@@ -80,7 +80,7 @@ impl ProviderRow {
         root.append(&header);
 
         let body = gtk::Label::new(None);
-        set_label_font(&body, 17, false);
+        set_label_font(&body, 16, false);
         body.set_wrap(true);
         body.set_selectable(true);
         body.set_xalign(0.0);
@@ -88,7 +88,7 @@ impl ProviderRow {
         root.append(&body);
 
         let error = gtk::Label::new(None);
-        set_label_font(&error, 13, false);
+        set_label_font(&error, 12, false);
         error.set_wrap(true);
         error.set_xalign(0.0);
         error.add_css_class("error");
@@ -322,6 +322,7 @@ struct UiState {
 
 impl UiState {
     fn new(app: &adw::Application) -> Rc<Self> {
+        gtk::Window::set_default_icon_name("stfn");
         let loaded = config::load();
         let (credentials, _) = secrets::load();
 
@@ -332,6 +333,7 @@ impl UiState {
             .default_height(640)
             .build();
         window.set_size_request(320, 400);
+        window.set_icon_name(Some("stfn"));
 
         let window_for_realize = window.clone();
         window.connect_realize(move |_| apply_app_id(&window_for_realize));
@@ -352,7 +354,7 @@ impl UiState {
         input.set_max_length(5000);
         input.set_placeholder_text(Some("输入中文或英文，自动翻译"));
         input.set_input_purpose(gtk::InputPurpose::FreeForm);
-        set_text_font(&input, 16);
+        set_text_font(&input, 15);
         input.set_margin_top(12);
         input.set_margin_bottom(12);
         input.set_margin_start(10);
@@ -368,7 +370,7 @@ impl UiState {
             .build();
 
         let direction = gtk::Label::new(None);
-        set_label_font(&direction, 13, true);
+        set_label_font(&direction, 12, true);
         direction.add_css_class("accent");
         direction.set_xalign(0.0);
         direction.set_visible(false);
@@ -396,7 +398,7 @@ impl UiState {
         divider.set_margin_bottom(2);
 
         let status = gtk::Label::new(None);
-        set_label_font(&status, 14, false);
+        set_label_font(&status, 13, false);
         status.set_wrap(true);
         status.set_xalign(0.0);
         status.set_margin_start(10);
@@ -1178,7 +1180,7 @@ fn provider_logo(id: &str) -> gtk::Image {
     if !loaded {
         image.set_icon_name(Some("application-x-executable-symbolic"));
     }
-    image.set_pixel_size(20);
+    image.set_pixel_size(18);
     image.set_valign(gtk::Align::Center);
     image
 }

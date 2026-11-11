@@ -179,6 +179,16 @@ Arch Linux（AUR / 预编译包待发布）：
 cargo install --path .   # 从源码安装
 ```
 
+应用图标在 `assets/icons/`，桌面项在 `assets/stfn.desktop`。安装图标到 hicolor 主题后，niri 的 overview / 启动器会显示 STFN 图标：
+
+```bash
+for s in 32 48 64 128 256 512 1024; do
+  install -Dm644 assets/icons/stfn-$s.png \
+    ~/.local/share/icons/hicolor/${s}x${s}/apps/stfn.png
+done
+install -Dm644 assets/stfn.desktop ~/.local/share/applications/stfn.desktop
+```
+
 ## 开发状态
 
 v0.1 目标：翻译窗口 + 应用内设置 + Bing/火山/阿里 + CLI 回显 / 通知 + 配置与密钥存储。
