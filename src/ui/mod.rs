@@ -148,7 +148,7 @@ impl AccentSlot {
         ipa.set_wrap(true);
         root.append(&ipa);
 
-        let button = gtk::Button::from_icon_name("audio-volume-high-symbolic");
+        let button = gtk::Button::from_icon_name("media-playback-start-symbolic");
         button.set_has_frame(false);
         button.set_valign(gtk::Align::Center);
         button.set_tooltip_text(Some(&format!("播放 {} 发音", accent.label())));
@@ -212,7 +212,7 @@ impl AccentSlot {
             AudioState::Idle => {
                 self.spinner.set_visible(false);
                 self.button.set_visible(self.data.source.borrow().is_some());
-                self.button.set_icon_name("audio-volume-high-symbolic");
+                self.button.set_icon_name("media-playback-start-symbolic");
                 self.button
                     .set_tooltip_text(Some(&format!("播放 {} 发音", self.accent.label())));
                 self.button.set_sensitive(true);
@@ -291,6 +291,9 @@ impl PronunciationView {
         let uk = pronunciation.uk.as_ref();
         let generic = pronunciation.generic.as_ref();
         let use_generic = us.is_none() && uk.is_none();
+        // 注意：GtkWidget::is_visible() 会连带检查父级；父级此刻仍是 hidden，
+        // 不能用它判断 slot 是否被标记为可见，必须自己记录。
+        let mut has_visible = false;
 
         for slot in &self.slots {
             let entry = match slot.accent {
@@ -305,12 +308,14 @@ impl PronunciationView {
                 }
             };
             match entry {
-                Some(entry) => slot.set_pronunciation(word, entry),
+                Some(entry) => {
+                    slot.set_pronunciation(word, entry);
+                    has_visible = true;
+                }
                 None => slot.clear(),
             }
         }
-        self.root
-            .set_visible(self.slots.iter().any(|slot| slot.root.is_visible()));
+        self.root.set_visible(has_visible);
     }
 
     fn clear(&self) {
