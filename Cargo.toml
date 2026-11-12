@@ -48,7 +48,7 @@ cpal = "0.18"
 
 [dev-dependencies]
 assert_cmd = "2"
-httpmock = "0.7"
+httpmock = "0.9"
 predicates = "3"
 tempfile = "3"
 
