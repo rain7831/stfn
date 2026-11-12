@@ -230,12 +230,29 @@ impl PronunciationService {
                 // 词典音频 URL 失效（404/5xx/网络错误）时同样退回 Edge TTS，
                 // 不能因为第三方 CDN 临时不可用就丢掉整个发音功能。
                 None => {
-                    self.tts
+                    tracing::debug!("dictionary audio unavailable, falling back to Edge TTS");
+                    match self
+                        .tts
                         .synthesize_voice(word.trim(), accent.default_voice())
-                        .await?
+                        .await
+                    {
+                        Some(bytes) => bytes,
+                        None => {
+                            tracing::debug!("Edge TTS fallback failed");
+                            return None;
+                        }
+                    }
                 }
             },
-            AudioSource::EdgeTts { voice } => self.tts.synthesize_voice(word.trim(), voice).await?,
+            AudioSource::EdgeTts { voice } => {
+                match self.tts.synthesize_voice(word.trim(), voice).await {
+                    Some(bytes) => bytes,
+                    None => {
+                        tracing::debug!("Edge TTS synthesis failed");
+                        return None;
+                    }
+                }
+            }
         };
         if bytes.is_empty() {
             return None;
@@ -294,14 +311,21 @@ impl PronunciationService {
     }
 
     async fn download(&self, url: &str) -> Option<Vec<u8>> {
-        let response = self
+        let response = match self
             .client
             .get(url)
             .header(reqwest::header::USER_AGENT, USER_AGENT)
             .timeout(AUDIO_TIMEOUT)
             .send()
             .await
-            .ok()?;
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::debug!(error = %error, "dictionary audio request failed");
+                return None;
+            }
+        };
+        tracing::debug!(status = %response.status(), "dictionary audio response");
         if !response.status().is_success() {
             return None;
         }

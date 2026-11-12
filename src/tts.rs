@@ -57,15 +57,39 @@ impl EdgeTts {
         }
         let text = text.to_string();
         let voice = voice.to_string();
-        let this = self.clone();
-        let task = tokio::task::spawn_blocking(move || this.synthesize_blocking(&text, &voice));
-        match tokio::time::timeout(SYNTH_TIMEOUT, task).await {
-            Ok(Ok(bytes)) => bytes,
-            _ => None,
+        for attempt in 1..=2 {
+            let this = self.clone();
+            let text_attempt = text.clone();
+            let voice_attempt = voice.clone();
+            let task = tokio::task::spawn_blocking(move || {
+                this.synthesize_blocking(&text_attempt, &voice_attempt)
+            });
+            match tokio::time::timeout(SYNTH_TIMEOUT, task).await {
+                Ok(Ok(Ok(bytes))) => {
+                    tracing::debug!(bytes = bytes.len(), "Edge TTS synthesized");
+                    return Some(bytes);
+                }
+                Ok(Ok(Err(error))) => {
+                    tracing::debug!(attempt, error = %error, "Edge TTS synthesize failed");
+                    if attempt == 1 {
+                        // 403 通常是 Edge 端的瞬时限流；换一条新连接再试一次。
+                        tokio::time::sleep(Duration::from_millis(700)).await;
+                    }
+                }
+                Ok(Err(error)) => {
+                    tracing::debug!(error = %error, "Edge TTS task failed");
+                    break;
+                }
+                Err(_) => {
+                    tracing::debug!("Edge TTS synthesis timed out");
+                    break;
+                }
+            }
         }
+        None
     }
 
-    fn synthesize_blocking(&self, text: &str, short_voice: &str) -> Option<Vec<u8>> {
+    fn synthesize_blocking(&self, text: &str, short_voice: &str) -> Result<Vec<u8>, String> {
         let config = SpeechConfig {
             voice_name: self.full_voice_name(short_voice),
             audio_format: AUDIO_FORMAT.to_string(),
@@ -73,12 +97,18 @@ impl EdgeTts {
             rate: 0,
             volume: 0,
         };
-        let mut client = msedge_tts::tts::client::connect().ok()?;
-        let audio = client.synthesize(text, &config).ok()?;
+        let mut client = msedge_tts::tts::client::connect().map_err(|error| {
+            tracing::debug!(error = %error, "Edge TTS connect failed");
+            error.to_string()
+        })?;
+        let audio = client.synthesize(text, &config).map_err(|error| {
+            tracing::debug!(error = %error, "Edge TTS synthesize failed");
+            error.to_string()
+        })?;
         if audio.audio_bytes.is_empty() {
-            None
+            Err("Edge TTS returned empty audio".to_string())
         } else {
-            Some(audio.audio_bytes)
+            Ok(audio.audio_bytes)
         }
     }
 
@@ -228,7 +258,8 @@ where
                             device.log_on_drop(false);
                             sink = Some(device);
                         }
-                        Err(_) => {
+                        Err(error) => {
+                            tracing::debug!(error = %error, "audio sink open failed");
                             on_event(AudioEvent::Failed { token, seq });
                             continue;
                         }
@@ -237,10 +268,14 @@ where
                 let mixer = sink.as_ref().expect("audio sink opened above").mixer();
                 match rodio::stream::play(mixer, Cursor::new(bytes)) {
                     Ok(handle) => {
+                        tracing::debug!(token, seq, "audio playback started");
                         current = Some((token, seq));
                         player = Some(handle);
                     }
-                    Err(_) => on_event(AudioEvent::Failed { token, seq }),
+                    Err(error) => {
+                        tracing::debug!(error = %error, "audio decode/play failed");
+                        on_event(AudioEvent::Failed { token, seq })
+                    }
                 }
             }
             Ok(AudioCommand::Stop { token }) => {

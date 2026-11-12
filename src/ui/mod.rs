@@ -90,12 +90,11 @@ impl SlotAccent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// 单个 accent 的播放按钮状态。
+/// 单个 accent 的播放按钮状态；失败后回到 Idle 以便重试。
 enum AudioState {
     Idle,
     Loading,
     Playing,
-    Unavailable,
 }
 
 /// 播放请求：token/epoch 把异步结果映射回当前按钮，避免旧单词覆盖新状态。
@@ -230,11 +229,13 @@ impl AccentSlot {
                     .set_tooltip_text(Some(&format!("停止 {} 发音", self.accent.label())));
                 self.button.set_sensitive(true);
             }
-            AudioState::Unavailable => {
-                self.spinner.set_visible(false);
-                self.button.set_visible(false);
-            }
         }
+    }
+
+    /// 失败后保留按钮，只改 tooltip，让用户可以直接重试。
+    fn set_error_hint(&self) {
+        self.button.set_visible(self.data.source.borrow().is_some());
+        self.button.set_tooltip_text(Some("发音加载失败，点击重试"));
     }
 
     fn clear(&self) {
@@ -1300,7 +1301,7 @@ impl UiState {
                         .await;
                 });
             }
-            AudioState::Loading | AudioState::Unavailable => {}
+            AudioState::Loading => {}
         }
     }
 
@@ -1317,7 +1318,11 @@ impl UiState {
                 slot.set_state(AudioState::Playing);
                 self.audio_player().play(token, seq, bytes.as_ref().clone());
             }
-            None => slot.set_state(AudioState::Unavailable),
+            None => {
+                tracing::debug!(token, "audio unavailable, keeping play button for retry");
+                slot.set_state(AudioState::Idle);
+                slot.set_error_hint();
+            }
         }
     }
 
@@ -1351,11 +1356,16 @@ impl UiState {
         }
         match event {
             AudioEvent::Finished { .. } | AudioEvent::Stopped { .. } => {
-                if slot.state() != AudioState::Unavailable {
-                    slot.set_state(AudioState::Idle);
-                }
+                slot.set_state(AudioState::Idle);
             }
-            AudioEvent::Failed { .. } => slot.set_state(AudioState::Unavailable),
+            AudioEvent::Failed { .. } => {
+                tracing::debug!(
+                    token,
+                    "audio playback failed, keeping play button for retry"
+                );
+                slot.set_state(AudioState::Idle);
+                slot.set_error_hint();
+            }
         }
     }
 
