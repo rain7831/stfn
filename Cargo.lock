@@ -3584,7 +3584,7 @@ dependencies = [
  "assert_cmd",
  "async-channel 2.5.0",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "clap",
  "cpal",
  "futures",
