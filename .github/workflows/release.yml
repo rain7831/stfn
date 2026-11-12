@@ -24,7 +24,7 @@ jobs:
             base-devel git github-cli cmake nasm perl pkgconf gtk4 libadwaita alsa-lib rust nodejs
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
