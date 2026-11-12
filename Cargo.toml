@@ -4,8 +4,8 @@ version = "0.2.0"
 edition = "2021"
 description = "Simple Translator For Niri"
 license = "MIT"
-repository = "https://github.com/jareed/niri-trans"
-homepage = "https://github.com/jareed/niri-trans"
+repository = "https://github.com/rain7831/stfn"
+homepage = "https://github.com/rain7831/stfn"
 rust-version = "1.92"
 
 [dependencies]

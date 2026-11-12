@@ -2,10 +2,10 @@
 
 在 [niri](https://github.com/YaLTeR/niri) 里随手可用的中英翻译工具。打开窗口输入即译；英文单词有 US/UK 音标和发音；选中文本按快捷键就能翻译。
 
-[![CI](https://github.com/jareed/niri-trans/actions/workflows/ci.yml/badge.svg)](https://github.com/jareed/niri-trans/actions/workflows/ci.yml)
+[![CI](https://github.com/rain7831/stfn/actions/workflows/ci.yml/badge.svg)](https://github.com/rain7831/stfn/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-当前版本：**v0.2.0** · [版本说明](docs/versions/v0.2.0.md) · [Releases](https://github.com/jareed/niri-trans/releases)
+当前版本：**v0.2.0** · [版本说明](docs/versions/v0.2.0.md) · [Releases](https://github.com/rain7831/stfn/releases)
 
 ![STFN 主界面](assets/screenshots/main.png)
 
@@ -27,7 +27,7 @@
 
 ```bash
 sudo pacman -S --needed base-devel rust gtk4 libadwaita alsa-lib
-git clone https://github.com/jareed/niri-trans.git
+git clone https://github.com/rain7831/stfn.git
 cd niri-trans
 cargo build --release
 sudo install -Dm755 target/release/stfn /usr/local/bin/stfn
@@ -40,7 +40,7 @@ cargo install --path .
 # 确保 ~/.cargo/bin 在 PATH 中
 ```
 
-预编译包见 [Releases](https://github.com/jareed/niri-trans/releases)（Arch Linux x86_64）；AUR 打包待发布。
+预编译包见 [Releases](https://github.com/rain7831/stfn/releases)（Arch Linux x86_64）；AUR 打包待发布。
 
 ### 其他 Linux
 
