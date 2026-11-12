@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    timeout-minutes: 45
+    steps:
+      - name: Install system dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel git github-cli cmake nasm perl pkgconf gtk4 libadwaita alsa-lib rust nodejs
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Verify tag matches package version
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "Cargo.toml version ($version) does not match tag ($tag)" >&2
+            exit 1
+          fi
+
+      - name: Tests
+        run: cargo test --locked --all-targets
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          name="stfn-${tag}-x86_64-linux"
+          mkdir -p "dist/${name}/assets/screenshots" "dist/${name}/docs/versions"
+          cp target/release/stfn README.md LICENSE "dist/${name}/"
+          cp assets/screenshots/main.png "dist/${name}/assets/screenshots/"
+          if [ -f "docs/versions/${tag}.md" ]; then
+            cp "docs/versions/${tag}.md" "dist/${name}/docs/versions/"
+          fi
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          (cd dist && sha256sum "${name}.tar.gz" > SHA256SUMS)
+          ls -lh dist
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          notes="docs/versions/${tag}.md"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/*.tar.gz dist/SHA256SUMS --clobber
+          elif [ -f "$notes" ]; then
+            gh release create "$tag" dist/*.tar.gz dist/SHA256SUMS \
+              --title "STFN ${tag}" --notes-file "$notes"
+          else
+            gh release create "$tag" dist/*.tar.gz dist/SHA256SUMS \
+              --title "STFN ${tag}" --generate-notes
+          fi

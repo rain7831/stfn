@@ -8,3 +8,7 @@ binary via `include_bytes!`, so no runtime icon-theme dependency is needed.
 - `alibaba.png` — Alibaba Cloud mark from Simple Icons (CC0), colored orange, transparent: https://github.com/simple-icons/simple-icons/blob/develop/icons/alibabacloud.svg
 
 To swap in official brand assets, keep a transparent square PNG at least 96x96.
+
+Bing and Volcengine marks are trademarks of their respective owners, included
+only to identify the translation providers. Alibaba Cloud mark is from Simple
+Icons (CC0). These assets are not covered by the project's MIT license.

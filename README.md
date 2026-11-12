@@ -1,112 +1,185 @@
 # STFN — Simple Translator For Niri
 
-为 [niri](https://github.com/YaLTeR/niri) 打造的极简中英翻译工具：打开窗口输入即译，也可以在终端一条命令拿到结果。
+在 [niri](https://github.com/YaLTeR/niri) 里随手可用的中英翻译工具。打开窗口输入即译；英文单词有 US/UK 音标和发音；选中文本按快捷键就能翻译。
 
-## 定位
+[![CI](https://github.com/jareed/niri-trans/actions/workflows/ci.yml/badge.svg)](https://github.com/jareed/niri-trans/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-- 只解决一件事：**中英互译**，快、轻、少依赖。
-- 默认零配置可用；需要更高配额或企业服务时，再接入云厂商。
-- 只做 niri / Wayland 下体验正确的版本（输入法候选框、窗口行为）。
+当前版本：**v0.2.0** · [版本说明](docs/versions/v0.2.0.md) · [Releases](https://github.com/jareed/niri-trans/releases)
 
-**非目标**：OCR / 划词翻译、生词本与复习、多语种、离线词典、文档翻译。
+![STFN 主界面](assets/screenshots/main.png)
 
-## 功能
+## 为什么用它
 
-### 翻译窗口
+- **打开就能用**：默认 Bing 免密钥，零配置即可中英互译。
+- **niri 原生**：普通平铺窗口，app-id 固定为 `stfn`，方便写 niri 规则和快捷键。
+- **输入舒服**：多行输入、自动翻译、fcitx5 / text-input-v3 候选框正常。
+- **单词会读**：英文单词显示 US/UK IPA，可播放真人音频；没有真人音频时自动兜底。
+- **句子也能读**：不是单词时提供“朗读原文/朗读译文”，整句朗读。
+- **选中即译**：在任意应用选中文本，按快捷键打开 STFN，自动填入并翻译。
+- **轻量**：Rust 单二进制；不常驻后台、不保存历史、不写磁盘缓存。
 
-- 单窗口、单列布局：第一行是多行输入框，之后每个已配置的翻译平台占一行，纵向排列。
-- 每次启动都是独立进程/窗口，关闭即退出，不常驻托盘，也不再复用已有窗口。
-- 输入框支持多行；Enter 换行，Ctrl+Enter 立即翻译；打开窗口后输入框自动聚焦。
-- 输入停顿 700ms 后自动翻译（可配置），无需按回车。
-- 输入法组合（preedit）期间不触发；候选词上屏后才开始计时，避免把拼音当输入。
-- 中文输入依赖 fcitx5 / ibus 正常显示候选框（text-input-v3）。
-- 输入框所在行显示检测到的方向（如 EN → 中）。
-- 结果行按配置顺序展示，只显示已配置且可用的平台；未启用的平台不占位。
-- 英文音标与发音：仅单词级。英译中显示在输入框下方；中译英按每个平台的译文显示在厂商标题下，不同平台的音标互不影响。
-- 词典没有真人音频时优先用有道词典发音，仍不可用才用 Edge TTS 兜底；查不到或不是单词时不占位，不显示拼音。
-- 单词命中后会在后台预加载 US/UK 发音；点击时若仍在下载则等待同一个请求，不重复下载。
-- 非单词英文文本（句子/短语）在输入卡片下方或结果卡片 header 提供“朗读原文/朗读译文”按钮，使用 Edge TTS 整句朗读。
-- 音频只缓存在内存（LRU + 总字节上限，退出即清空），不写磁盘；预加载不会产生持久缓存文件。
-- 单个平台失败不影响其他行，该行显示错误并支持重试。
-- 结果文本可选中复制，每行结果提供复制按钮；Esc 清空输入，Ctrl+L 聚焦输入框。
+## 安装
 
-### 设置页
+### Arch Linux（推荐）
 
-- 主窗口齿轮按钮，或 `stfn settings` 打开；设置页在主窗口内切换，不新开浮动窗口。
-- 自动翻译开关；开启时可调输入延迟（200–2000ms，默认 700ms）。
-- Bing / 火山引擎 / 阿里云的启用状态与密钥；密钥配置在对应引擎开关打开后才展开。
-- 已保存的密钥显示为 `******`：不修改则保留，清空并保存则删除，输入新值则替换。
-- 修改未保存就返回或退出，会弹出确认框。
-- 外观可选择“跟随系统 / 浅色 / 深色”，保存后立即生效；手动模式会覆盖系统生成的静态 GTK 调色板。
-- “数据来源”小组说明音标/音频由 dictionaryapi.dev、有道词典与 Edge TTS 提供。
-- 密钥默认存入系统 Secret Service（gnome-keyring 等）；不可用时需明确允许后写入 `0600` 凭据文件。
-- 环境变量优先级最高；来自环境变量的密钥在 UI 中只读。
-- 密钥输入默认掩码，不写日志、不打印、不进入桌面通知。
+从源码构建：
 
-### 翻译源
+```bash
+sudo pacman -S --needed base-devel rust gtk4 libadwaita alsa-lib
+git clone https://github.com/jareed/niri-trans.git
+cd niri-trans
+cargo build --release
+sudo install -Dm755 target/release/stfn /usr/local/bin/stfn
+```
 
-- **Bing**：默认，免 key（非官方接口，可能随时失效）。
-- **火山引擎机器翻译**：配置 Access Key / Secret Key 后启用。
-- **阿里云机器翻译通用版**：配置 AccessKey ID / AccessKey Secret 后启用。
-- 多平台并行请求，结果独立渲染。
+也可以安装到用户目录：
 
-### 语言方向
+```bash
+cargo install --path .
+# 确保 ~/.cargo/bin 在 PATH 中
+```
 
-- 自动判断：输入含 CJK 字符 → 译为英文；否则译为中文。
-- 纯数字 / 符号 / 空白：不发起请求。
-- v1 仅支持中英；其他语种明确提示不支持。
+预编译包见 [Releases](https://github.com/jareed/niri-trans/releases)（Arch Linux x86_64）；AUR 打包待发布。
 
-### 命令行
+### 其他 Linux
 
-GUI 与 CLI 共用同一套 provider 层，不做第二套逻辑。
+需要 GTK 4.22+、libadwaita 1.9+，以及 PipeWire 或 PulseAudio。当前只在 Arch Linux + niri 上开发和验证；其他 Wayland 桌面可以尝试，但不保证一致。
 
-| 命令 | 行为 |
-| --- | --- |
-| `stfn` | 新进程打开翻译窗口 |
-| `stfn settings` | 新进程打开主窗口并进入设置页 |
-| `stfn selection` | 新进程读取 primary selection，自动填入并翻译 |
-| `stfn hello` | 翻译并输出到 stdout |
-| `stfn --notify hello` | 翻译结果发送到桌面通知 |
-| `stfn --speak 你好` | 翻译后朗读英文译文，默认 US 音色 |
-| `stfn --json hello` | JSON 输出，便于脚本使用 |
-| `stfn --to en hello` | 强制目标语言 |
-| `stfn --source all hello` | 指定翻译源 / 聚合全部可用源 |
-| `echo hello \| stfn -` | 从 stdin 读取 |
+## 开始使用
 
-- 退出码：0 成功，非 0 失败；`--json` 字段保持稳定，便于脚本消费。
-- `--json` 的 `phonetic` 对英文单词填写词典 IPA，未命中为 `null`。
-- `--speak` 只朗读英文译文；中文目标返回 1，TTS 不可用时提示并返回 1。
-- `--source` 不指定时使用配置里的 `default_source`。
+### 打开翻译窗口
 
-### 性能与依赖
+```bash
+stfn
+```
 
-- Rust 单二进制；除 GTK4 等系统库外，无 Python / Node 等运行时依赖。
-- 目标：GUI 冷启动 < 300ms，常驻内存 < 100MB（后续实测校准）。
-- 空闲不轮询、不发请求；同一会话内相同输入走内存缓存。
+每次启动都是新进程和新窗口，关闭窗口即退出；没有托盘，也不会复用旧窗口。
 
-## 平台能力矩阵
+在 niri 里建议绑定 `Mod+Shift+T`：
 
-| 能力 | Bing（默认） | 火山引擎 | 阿里云 |
-| --- | --- | --- | --- |
-| 凭据 | 无需 | Access Key / Secret Key | AccessKey ID / Secret |
-| 中→英 / 英→中 | ✅ | ✅ | ✅ |
-| 自动识别源语言 | ✅ | ✅ | ✅ |
-| 音标 | ✅ 应用侧词典后处理（英文单词） | ❌（后处理共享） | ❌（后处理共享） |
-| 朗读 | ✅ 词典音频 / Edge TTS 兜底 | 需另开语音合成 | 需另开语音合成 |
-| 成本 | 免费（非官方） | 按量 / 有免费额度 | 每月有免费额度 |
+```kdl
+binds {
+    Mod+Shift+T { spawn "stfn"; }
+    Mod+Shift+Y { spawn "stfn" "selection"; }
+}
+```
 
-> Bing 为社区常用的非官方接口，无 SLA 保证；这是"默认零配置"的代价，README 与 UI 中都要说明。
+### 输入与快捷键
 
-## 隐私
+- 直接输入中文或英文，停顿约 700ms 自动翻译。
+- `Ctrl+Enter`：立即翻译，不等自动翻译。
+- `Enter`：换行；输入框支持多行。
+- `Esc`：有内容时清空；为空时关闭窗口。
+- `Ctrl+L`：重新聚焦输入框。
+- `Ctrl+,`：打开设置页。
 
-- 不保存输入历史，不落盘翻译内容。
-- 输入只发送到当前启用的翻译平台；未启用的平台不会收到请求。
-- 英文单词查询会发送给 dictionaryapi.dev；单词发音会请求有道词典；Edge TTS 兜底会把待朗读文本发送给微软。三者都不记录、不遥测。
-- 不做遥测、不内置统计上报。
+输入框上方会显示检测到的方向，例如 `EN → 中`。
 
-## 配置
+### 听发音和朗读
 
-配置文件：`$XDG_CONFIG_HOME/stfn/config.toml`（默认 `~/.config/stfn/config.toml`），首次启动自动生成最小配置。
+- **英译中**：输入单个英文单词时，输入卡片下方显示 `US /.../ ▶` 和 `UK /.../ ▶`。
+- **中译英**：每个翻译结果卡片在厂商标题下方显示该译文的音标和播放按钮。
+- 词典没有真人音频时，会依次尝试有道词典发音、Edge TTS；播放失败会保留按钮，可以再点一次。
+- 非单词的英文文本（句子、短语）会显示“朗读原文/朗读译文”，使用 Edge TTS 整句朗读；失败时用有道兜底。
+- 音频在单词显示后自动预加载，点击时通常已就绪；音频只缓存在内存，不会占用磁盘。
+
+播放需要系统音频正常。如果听不到声音，先确认 PipeWire/PulseAudio 的默认输出和音量。
+
+### 翻译选中的文本
+
+在 niri 中选中任意应用的文本，按 `Mod+Shift+Y`（需要先添加上面的绑定）：
+
+```bash
+stfn selection
+```
+
+STFN 会读取 Wayland 的 primary selection，把文本填入输入框、聚焦并立即翻译。
+
+- 只读取 primary selection，不会覆盖普通剪贴板。
+- 读不到选区时会提示，不会回退读取旧剪贴板，也不会模拟 `Ctrl+C`。
+- 选区超过 5000 字符会直接拒绝，不填入、不翻译。
+- primary selection 由应用主动设置；部分 Electron/特殊应用可能不支持。
+
+### 设置
+
+打开设置页的三种方式：
+
+- 主窗口右上角齿轮；
+- 快捷键 `Ctrl+,`；
+- 命令行 `stfn settings`（新进程打开设置页）。
+
+设置页支持：
+
+- 自动翻译开关和输入延迟（200–2000ms）。
+- Bing / 火山引擎 / 阿里云的启用与密钥。
+- 外观：跟随系统 / 浅色 / 深色，保存后立即生效。
+- 已保存的密钥显示为 `******`；不改动保留，清空保存删除，输入新值替换。
+- 修改未保存就返回或关闭窗口，会弹出确认。
+
+手动主题会覆盖系统生成的静态 GTK 调色板（例如 Noctalia 的 `noctalia.css`）；选择“跟随系统”会恢复系统主题。
+
+## 命令行
+
+GUI 和 CLI 共用同一套翻译源，CLI 不会初始化 GTK。
+
+```bash
+stfn hello                 # 翻译并输出
+stfn --to en 你好           # 强制目标语言
+stfn --source all hello    # 使用所有已启用翻译源
+stfn --json hello          # JSON 输出，便于脚本
+stfn --notify hello        # 结果发送到桌面通知
+stfn --speak 你好           # 朗读英文译文（默认 US）
+echo hello | stfn -        # 从 stdin 读取
+```
+
+- 退出码：`0` 成功，`1` 运行时失败，`2` 用法/输入错误。
+- `--json` 的 `phonetic` 会对英文单词填 IPA；未命中或非单词为 `null`。
+- `--speak` 只朗读英文译文；中文目标返回 1。TTS 不可用时提示并返回 1。
+- `stfn selection` 是 GUI 启动意图，不输出 stdout。
+
+完整参数见 [`docs/tech/cli.md`](docs/tech/cli.md)。
+
+## niri 配置
+
+推荐绑定：
+
+```kdl
+binds {
+    Mod+Shift+T { spawn "stfn"; }
+    Mod+Shift+Y { spawn "stfn" "selection"; }
+}
+
+window-rule {
+    match app-id="^stfn$"
+    default-column-width { proportion 0.25; }
+}
+```
+
+初始宽度为屏幕的 1/4；需要时用 `Mod+R` 或拖拽调宽。
+
+如果更喜欢悬浮窗口，可以再添加：
+
+```kdl
+window-rule {
+    match app-id="^stfn$"
+    open-floating true
+    default-floating-position x=0 y=0 relative-to="top"
+    default-column-width { proportion 0.25; }
+    default-window-height { proportion 0.6; }
+}
+```
+
+## 配置与密钥
+
+配置文件位置：
+
+```text
+$XDG_CONFIG_HOME/stfn/config.toml
+# 默认 ~/.config/stfn/config.toml
+```
+
+首次启动会自动生成。常用配置：
 
 ```toml
 [general]
@@ -126,90 +199,81 @@ enabled = false
 enabled = false
 ```
 
-密钥不写在 `config.toml`：设置页会写入 Secret Service，或回退到 `credentials.toml`。
-
-- 只需填写要用的平台；`enabled` 为 true 才会出现在结果区，缺凭据时该行提示。
-- 启用多个平台时 GUI 全部展示；`default_source` 只决定 CLI 未指定 `--source` 时的默认源。
-- 凭据可用环境变量覆盖（如 `STFN_VOLC_ACCESS_KEY`、`STFN_ALI_ACCESS_KEY_ID`、`STFN_ALI_ACCESS_KEY_SECRET`），推荐放环境变量以免明文落盘。
-- 设置页直接改写 `config.toml`（保留注释）与凭据存储，保存后立即生效，无需重启。
-- 密钥优先写 Secret Service；不可用时写 `$XDG_CONFIG_HOME/stfn/credentials.toml`（权限 0600）。
-
-## niri 集成
-
-默认按普通平铺窗口打开，占一个列；绑定快捷键即可随时呼出。`Mod+T` 是 niri 默认终端键，这里用 `Mod+Shift+T`（Translate）：
-
-```kdl
-binds {
-    Mod+Shift+T { spawn "stfn"; }
-    Mod+Shift+Y { spawn "stfn" "selection"; }
-}
-
-window-rule {
-    match app-id="^stfn$"
-    default-column-width { proportion 0.25; }
-}
-```
-
-选中任意应用里的文本后按 `Mod+Shift+Y`，新窗口会自动填入并翻译该文本。只读取 Wayland 的 primary selection，不覆盖普通剪贴板；选区为空或超过 5000 字符时只给出提示。
-
-初始宽度取屏幕的 1/4，翻译工具不需要占满整个工作区；需要时用 `Mod+R` 或拖拽调宽。
-
-如果更想要悬浮弹窗，可以额外加一条窗口规则（可选）：
-
-```kdl
-window-rule {
-    match app-id="^stfn$"
-    open-floating true
-    default-floating-position x=0 y=0 relative-to="top"
-    default-column-width { proportion 0.25; }
-    default-window-height { proportion 0.6; }
-}
-```
-
-## 技术架构
-
-- 语言：Rust
-- GUI：GTK4 + libadwaita（gtk4-rs / libadwaita-rs），优先保证 fcitx5 / text-input-v3 输入体验
-- HTTP：reqwest + rustls，异步运行时 tokio
-- 进程模型：每次启动新进程/独立窗口（GApplication `NON_UNIQUE`），不做单实例转发
-- 密钥：Secret Service（keyring/zbus）优先，`0600` 凭据文件兜底
-- 通知：D-Bus `org.freedesktop.Notifications`
-- 音频：PipeWire
-
-设计文档见 `docs/tech/`：
-
-- `architecture.md` —— 进程模型、窗口生命周期、模块划分
-- `ui.md` —— 主窗口布局、交互、输入法
-- `settings.md` —— 应用内设置页、密钥存储与校验
-- `providers.md` —— 各翻译平台接口与能力降级
-- `cli.md` —— 命令行参数与输出格式
-- `config.md` —— 配置项与环境变量
-- `pronunciation.md` —— v0.2 英文音标/发音设计
-- `selection.md` —— v0.2 niri 选区翻译设计
-- `v0.2-plan.md` —— v0.2 功能规划
-
-## 安装
-
-Arch Linux（AUR / 预编译包待发布）：
+- 只有 `enabled = true` 的平台会出现在结果区。
+- 火山/阿里需要密钥；密钥不写入 `config.toml`。
+- 密钥优先存储在系统 Secret Service（gnome-keyring 等）；不可用时，需在设置页明确允许后写入 `0600` 的 `credentials.toml`。
+- 环境变量优先级最高，适合脚本或不想落盘密钥的场景：
 
 ```bash
-cargo install --path .   # 从源码安装
+export STFN_VOLC_ACCESS_KEY="..."
+export STFN_VOLC_SECRET_KEY="..."
+export STFN_ALI_ACCESS_KEY_ID="..."
+export STFN_ALI_ACCESS_KEY_SECRET="..."
 ```
 
-## 开发状态
+完整说明见 [`docs/tech/config.md`](docs/tech/config.md)。
 
-v0.1.0 已完成：翻译窗口 + 应用内设置 + Bing / 火山 / 阿里 + CLI 回显 / 通知 + 配置与密钥存储。版本总结见 `docs/versions/v0.1.0.md`。
+## 常见问题
 
-v0.2.0 已发布：单词音标/发音、句子级朗读、系统/手动主题、启动与选区注入聚焦、niri 选区翻译，并改为每次启动新进程；CLI 增加 `stfn selection`、`--speak` 与 JSON `phonetic`。版本总结见 `docs/versions/v0.2.0.md`。
+### Bing 用不了 / 翻译失败
 
-## 数据来源
+Bing 是免密钥的非官方网页接口，没有 SLA，接口变化或网络限制都可能导致失败。可以在设置页启用火山引擎或阿里云作为替代。
 
-- 英文音标与真人发音来自 [dictionaryapi.dev](https://dictionaryapi.dev/)，数据采用 CC BY-SA 3.0，音频为 CC BY / BY-SA。
-- 词典没有真人音频时，优先使用有道词典发音（`dict.youdao.com/dictvoice`，US/UK 两种发音）。
-- 有道也不可用时，使用 Edge TTS（非官方 Microsoft Read Aloud 接口）兜底。
-- 句子级朗读优先使用 Edge TTS，失败时用有道发音兜底；句子音频不缓存。
-- dictionaryapi.dev、有道与 Edge TTS 都是在线服务，查询会把单词或待朗读文本发送给对应服务；STFN 不记录、不写磁盘缓存。
+### 音标不显示
+
+音标只对**单个英文单词**显示，句子和短语不会显示 IPA。词典查询需要网络；查不到、非单词或词典服务暂时不可用时不会占位。此时英文句子仍可以使用“朗读原文/朗读译文”。
+
+### 没有声音
+
+STFN 通过 PipeWire/PulseAudio 播放。请先确认系统默认输出、静音状态和音量；可以先用 `stfn --speak 你好` 做一次简单测试。Edge TTS 偶发限流时会自动重试并使用有道兜底。
+
+### 改了颜色方案没有变化
+
+设置页的修改需要点击“保存”或按 `Ctrl+S`。手动模式会覆盖系统静态 GTK 调色板；如果选择“跟随系统”，则重新交给系统主题（例如 Noctalia）管理。
+
+### 打开多个窗口 / 关闭后没有后台进程
+
+这是 v0.2 的设计：每次启动独立进程和窗口，关闭即退出，不常驻后台。
+
+### 选区翻译读不到文本
+
+STFN 只读 primary selection，不读普通剪贴板。请先在支持 primary selection 的应用中选中文本；部分 Electron/特殊应用可能不设置 primary selection。
+
+## 隐私与数据来源
+
+- 不保存翻译历史，不做遥测，不落盘翻译内容。
+- 输入会发送到你启用的翻译平台（Bing / 火山 / 阿里）。
+- 英文单词查询会发送给 dictionaryapi.dev。
+- 单词发音会请求有道词典；仍然失败时会使用 Edge TTS（非官方 Microsoft Read Aloud 接口）。
+- 句子朗读使用 Edge TTS，失败时用有道兜底。
+- 音标和音频只缓存在内存，退出即清空，不产生磁盘缓存文件。
+- Bing 为社区常用的非官方接口；Bing、火山、阿里、有道和 Edge TTS 都可能随时变化。
+
+数据来源：
+
+- 英文音标与真人音频：[dictionaryapi.dev](https://dictionaryapi.dev/)，CC BY-SA 3.0（音频 CC BY / BY-SA）。
+- 单词音频兜底：有道词典发音（`dict.youdao.com/dictvoice`）。
+- 句子/最终兜底：Edge TTS（非官方 Microsoft Read Aloud 接口）。
+- 厂商 logo 来自各厂商品牌资源或 Simple Icons；商标归各自所有者。
+
+## 开发
+
+- 设计与技术文档：[`docs/tech/`](docs/tech/)
+- 版本说明：[`docs/versions/`](docs/versions/)
+- 语言：Rust；MSRV 见 `Cargo.toml`。
+- 系统依赖：GTK 4.22+、libadwaita 1.9+、ALSA（rodio）。
+
+常用检查：
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo build --release
+```
+
+CI 在 Arch Linux 容器中运行上述 fmt/clippy/test/build；打 `v*` 标签会触发 release workflow，构建并上传 `stfn-<tag>-x86_64-linux.tar.gz`。
 
 ## License
 
-MIT
+MIT，见 [`LICENSE`](LICENSE)。
