@@ -3586,6 +3586,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "clap",
+ "cpal",
  "futures",
  "gdk4-wayland",
  "gtk4",

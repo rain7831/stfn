@@ -180,6 +180,52 @@ fn synth_full_name(short_voice: &str) -> String {
     }
 }
 
+/// 打开音频输出。
+///
+/// Linux 上 cpal 的默认设备可能是 ALSA 的硬件 PCM，直接绕过 PipeWire，
+/// 导致 cpal 播放“成功”但实际没有进入系统混音器、用户听不到声音。
+/// 优先选择 ALSA 的 `pipewire` / `pulse` 设备，让音频经过会话混音器。
+fn open_output_sink() -> Option<rodio::MixerDeviceSink> {
+    #[cfg(target_os = "linux")]
+    {
+        use cpal::traits::{DeviceTrait, HostTrait};
+
+        if let Ok(devices) = cpal::default_host().output_devices() {
+            let mut ranked = Vec::new();
+            for device in devices {
+                let id = device
+                    .id()
+                    .map(|id| id.id().to_string())
+                    .unwrap_or_default();
+                let rank = match id.as_str() {
+                    "pipewire" => 0,
+                    "pulse" => 1,
+                    "default" => 2,
+                    // 永远不要主动选 null，否则会“成功播放”但完全无声。
+                    "null" => 99,
+                    _ => 3,
+                };
+                ranked.push((rank, device));
+            }
+            ranked.sort_by_key(|(rank, _)| *rank);
+
+            for (rank, device) in ranked {
+                if rank == 99 {
+                    continue;
+                }
+                tracing::debug!(device = %device, "trying audio device");
+                if let Ok(builder) = rodio::DeviceSinkBuilder::from_device(device) {
+                    if let Ok(sink) = builder.open_sink_or_fallback() {
+                        return Some(sink);
+                    }
+                }
+            }
+        }
+    }
+
+    rodio::DeviceSinkBuilder::open_default_sink().ok()
+}
+
 /// 音频播放命令；token 定位按钮，seq 用于丢弃同一按钮的旧播放事件。
 #[derive(Debug)]
 pub enum AudioCommand {
@@ -253,13 +299,13 @@ where
                     });
                 }
                 if sink.is_none() {
-                    match rodio::DeviceSinkBuilder::open_default_sink() {
-                        Ok(mut device) => {
+                    match open_output_sink() {
+                        Some(mut device) => {
                             device.log_on_drop(false);
                             sink = Some(device);
                         }
-                        Err(error) => {
-                            tracing::debug!(error = %error, "audio sink open failed");
+                        None => {
+                            tracing::debug!("audio sink open failed");
                             on_event(AudioEvent::Failed { token, seq });
                             continue;
                         }
@@ -306,8 +352,7 @@ where
 
 /// 阻塞播放一段 MP3，直到播完；供 CLI `--speak` 使用。
 pub fn play_blocking(bytes: Vec<u8>) -> Result<(), String> {
-    let mut sink = rodio::DeviceSinkBuilder::open_default_sink()
-        .map_err(|_| "无法打开音频输出设备".to_string())?;
+    let mut sink = open_output_sink().ok_or_else(|| "无法打开音频输出设备".to_string())?;
     sink.log_on_drop(false);
     let player = rodio::stream::play(sink.mixer(), Cursor::new(bytes))
         .map_err(|_| "无法解码朗读音频".to_string())?;
