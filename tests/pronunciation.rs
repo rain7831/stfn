@@ -20,7 +20,7 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 
 #[test]
-fn parses_us_uk_and_falls_back_to_edge_tts() {
+fn parses_us_uk_and_uses_youdao_when_dictionary_audio_is_missing() {
     let server = MockServer::start();
     server.mock(|when, then| {
         when.method(GET).path("/hello");
@@ -41,12 +41,7 @@ fn parses_us_uk_and_falls_back_to_edge_tts() {
 
     let us = result.us.expect("US IPA");
     assert_eq!(us.ipa, "/həˈloʊ/");
-    assert_eq!(
-        us.audio,
-        Some(AudioSource::EdgeTts {
-            voice: "en-US-AriaNeural"
-        })
-    );
+    assert_eq!(us.audio, Some(AudioSource::Youdao { accent: Accent::Us }));
 
     let uk = result.uk.expect("UK IPA");
     assert_eq!(uk.ipa, "/həˈləʊ/");
@@ -98,7 +93,10 @@ fn unmarked_ipa_alone_becomes_generic() {
     assert!(result.uk.is_none());
     let generic = result.generic.expect("generic IPA");
     assert_eq!(generic.ipa, "/tɛst/");
-    assert!(matches!(generic.audio, Some(AudioSource::EdgeTts { .. })));
+    assert_eq!(
+        generic.audio,
+        Some(AudioSource::Youdao { accent: Accent::Us })
+    );
 }
 
 #[test]
@@ -201,4 +199,64 @@ fn concurrent_audio_requests_share_one_download() {
         assert_eq!(first.as_slice(), audio.as_slice());
     });
     mock.assert_hits(1);
+}
+
+#[test]
+fn uses_youdao_audio_when_dictionary_url_fails() {
+    let server = MockServer::start();
+    let dictionary_audio = server.mock(|when, then| {
+        when.method(GET).path("/missing.mp3");
+        then.status(502);
+    });
+    let youdao = server.mock(|when, then| {
+        when.method(GET)
+            .path("/dictvoice")
+            .query_param("audio", "hello")
+            .query_param("type", "1");
+        then.status(200)
+            .header("content-type", "audio/mpeg")
+            .body(b"youdao-mp3");
+    });
+
+    let client = reqwest::Client::builder().build().unwrap();
+    let service = PronunciationService::with_base_urls(
+        client,
+        format!("{}/api/v2/entries/en/", server.base_url()),
+        format!("{}/dictvoice", server.base_url()),
+    );
+    let source = AudioSource::DictionaryUrl(format!("{}/missing.mp3", server.base_url()));
+    let bytes = runtime()
+        .block_on(service.audio("hello", Accent::Us, &source))
+        .expect("Youdao fallback audio");
+    assert_eq!(bytes.as_slice(), b"youdao-mp3");
+    dictionary_audio.assert_hits(1);
+    youdao.assert_hits(1);
+}
+
+#[test]
+fn youdao_uses_uk_voice_type() {
+    let server = MockServer::start();
+    let youdao = server.mock(|when, then| {
+        when.method(GET)
+            .path("/dictvoice")
+            .query_param("audio", "hello")
+            .query_param("type", "2");
+        then.status(200).body(b"uk-mp3");
+    });
+
+    let client = reqwest::Client::builder().build().unwrap();
+    let service = PronunciationService::with_base_urls(
+        client,
+        format!("{}/api/v2/entries/en/", server.base_url()),
+        format!("{}/dictvoice", server.base_url()),
+    );
+    let bytes = runtime()
+        .block_on(service.audio(
+            "hello",
+            Accent::Uk,
+            &AudioSource::Youdao { accent: Accent::Uk },
+        ))
+        .expect("Youdao UK audio");
+    assert_eq!(bytes.as_slice(), b"uk-mp3");
+    youdao.assert_hits(1);
 }

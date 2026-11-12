@@ -19,6 +19,7 @@ use tokio::sync::oneshot;
 use crate::tts::EdgeTts;
 
 const DEFAULT_BASE_URL: &str = "https://api.dictionaryapi.dev/api/v2/entries/en/";
+const DEFAULT_YOUDAO_BASE: &str = "https://dict.youdao.com/dictvoice";
 const USER_AGENT: &str = concat!("stfn/", env!("CARGO_PKG_VERSION"));
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 const AUDIO_TIMEOUT: Duration = Duration::from_secs(8);
@@ -50,10 +51,11 @@ impl Accent {
     }
 }
 
-/// 音频来源：词典真人音频 URL，或 Edge TTS 兜底音色。
+/// 音频来源：词典真人音频 URL、有道词典发音，或 Edge TTS 兜底音色。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioSource {
     DictionaryUrl(String),
+    Youdao { accent: Accent },
     EdgeTts { voice: &'static str },
 }
 
@@ -105,6 +107,7 @@ pub fn is_word(text: &str) -> bool {
 pub struct PronunciationService {
     client: reqwest::Client,
     base_url: String,
+    youdao_base: String,
     dict: Mutex<LruCache<String, CacheEntry<Option<Pronunciation>>>>,
     audio: Mutex<AudioCache>,
     inflight: Mutex<HashMap<String, Vec<oneshot::Sender<Option<Pronunciation>>>>>,
@@ -122,6 +125,7 @@ type AudioWaiters = HashMap<AudioKey, Vec<oneshot::Sender<Option<Arc<Vec<u8>>>>>
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum AudioSourceKind {
     Dictionary,
+    Youdao,
     EdgeTts,
 }
 
@@ -204,11 +208,23 @@ impl PronunciationService {
 
     /// 允许集成测试把词典指向本地 mock；base URL 会补齐结尾的 `/`。
     pub fn with_base_url(client: reqwest::Client, base_url: impl Into<String>) -> Self {
+        Self::with_base_urls(client, base_url, DEFAULT_YOUDAO_BASE)
+    }
+
+    /// 词典与有道发音都允许指向本地 mock，避免集成测试访问真实服务。
+    pub fn with_base_urls(
+        client: reqwest::Client,
+        base_url: impl Into<String>,
+        youdao_base: impl Into<String>,
+    ) -> Self {
         let base_url = base_url.into();
         let base_url = format!("{}/", base_url.trim_end_matches('/'));
+        let youdao_base = youdao_base.into();
+        let youdao_base = youdao_base.trim_end_matches('/').to_string();
         Self {
             client,
             base_url,
+            youdao_base,
             dict: Mutex::new(LruCache::new(non_zero(DICT_CAPACITY))),
             audio: Mutex::new(AudioCache::new()),
             inflight: Mutex::new(HashMap::new()),
@@ -320,35 +336,47 @@ impl PronunciationService {
         source: &AudioSource,
     ) -> Option<Vec<u8>> {
         match source {
-            AudioSource::DictionaryUrl(url) => match self.download(url).await {
-                Some(bytes) => Some(bytes),
-                // 词典音频 URL 失效（404/5xx/网络错误）时同样退回 Edge TTS，
-                // 不能因为第三方 CDN 临时不可用就丢掉整个发音功能。
-                None => {
-                    tracing::debug!("dictionary audio unavailable, falling back to Edge TTS");
-                    match self
-                        .tts
-                        .synthesize_voice(word.trim(), accent.default_voice())
-                        .await
-                    {
-                        Some(bytes) => Some(bytes),
-                        None => {
-                            tracing::debug!("Edge TTS fallback failed");
-                            None
-                        }
-                    }
+            AudioSource::DictionaryUrl(url) => {
+                if let Some(bytes) = self.download(url).await {
+                    return Some(bytes);
                 }
-            },
-            AudioSource::EdgeTts { voice } => {
-                match self.tts.synthesize_voice(word.trim(), voice).await {
-                    Some(bytes) => Some(bytes),
-                    None => {
-                        tracing::debug!("Edge TTS synthesis failed");
-                        None
-                    }
+                tracing::debug!("dictionary audio unavailable, falling back to Youdao");
+                if let Some(bytes) = self.youdao_audio(word, accent).await {
+                    return Some(bytes);
                 }
+                tracing::debug!("Youdao audio failed, falling back to Edge TTS");
+                self.edge_tts_audio(word, accent).await
             }
+            AudioSource::Youdao {
+                accent: source_accent,
+            } => {
+                if let Some(bytes) = self.youdao_audio(word, *source_accent).await {
+                    return Some(bytes);
+                }
+                tracing::debug!("Youdao audio failed, falling back to Edge TTS");
+                self.edge_tts_audio(word, accent).await
+            }
+            AudioSource::EdgeTts { voice } => self.tts.synthesize_voice(word.trim(), voice).await,
         }
+    }
+
+    async fn youdao_audio(&self, word: &str, accent: Accent) -> Option<Vec<u8>> {
+        let kind = match accent {
+            Accent::Us => 1,
+            Accent::Uk => 2,
+        };
+        let url = format!(
+            "{}?audio={}&type={kind}",
+            self.youdao_base,
+            encode_segment(word.trim())
+        );
+        self.download(&url).await
+    }
+
+    async fn edge_tts_audio(&self, word: &str, accent: Accent) -> Option<Vec<u8>> {
+        self.tts
+            .synthesize_voice(word.trim(), accent.default_voice())
+            .await
     }
 
     fn cached(&self, word: &str) -> Option<Option<Pronunciation>> {
@@ -434,11 +462,11 @@ impl PronunciationService {
         {
             Ok(response) => response,
             Err(error) => {
-                tracing::debug!(error = %error, "dictionary audio request failed");
+                tracing::debug!(error = %error, "audio request failed");
                 return None;
             }
         };
-        tracing::debug!(status = %response.status(), "dictionary audio response");
+        tracing::debug!(status = %response.status(), "audio response");
         if !response.status().is_success() {
             return None;
         }
@@ -573,11 +601,12 @@ fn merge_accent(slot: &mut Option<AccentPronunciation>, candidate: Candidate, ac
     }
 }
 
-// 无 accent 标记且没有音频时用 Edge TTS；generic 使用 US 音色。
+// 无词典真人音频时用有道发音；Edge TTS 仅作为最终兜底。generic 使用 US。
 fn finish_entry(ipa: String, audio: Option<String>, accent: Option<Accent>) -> AccentPronunciation {
+    // 没有词典真人音频时优先用有道发音；Edge TTS 仅作为最终兜底。
     let audio = audio.map(AudioSource::DictionaryUrl).or_else(|| {
-        Some(AudioSource::EdgeTts {
-            voice: accent.unwrap_or(Accent::Us).default_voice(),
+        Some(AudioSource::Youdao {
+            accent: accent.unwrap_or(Accent::Us),
         })
     });
     AccentPronunciation { ipa, audio }
@@ -621,6 +650,7 @@ fn audio_key(word: &str, accent: Accent, source: &AudioSource) -> AudioKey {
         accent,
         match source {
             AudioSource::DictionaryUrl(_) => AudioSourceKind::Dictionary,
+            AudioSource::Youdao { .. } => AudioSourceKind::Youdao,
             AudioSource::EdgeTts { .. } => AudioSourceKind::EdgeTts,
         },
     )

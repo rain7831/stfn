@@ -1726,7 +1726,7 @@ fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
     about_group.set_title("数据来源");
     let attribution = gtk::Label::new(Some(
         "英文音标与真人发音来自 dictionaryapi.dev（CC BY-SA 3.0）。\n\
-         Edge TTS 为非官方 Microsoft Read Aloud 接口，仅在词典无音频时兜底。",
+         有道词典发音作为单词音频优先兜底；Edge TTS（非官方 Microsoft Read Aloud 接口）仅在两者不可用时兜底。",
     ));
     attribution.set_wrap(true);
     attribution.set_xalign(0.0);
