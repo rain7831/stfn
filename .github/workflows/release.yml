@@ -57,7 +57,7 @@ jobs:
           name="stfn-${tag}-x86_64-linux"
           mkdir -p "dist/${name}/assets/screenshots" "dist/${name}/docs/versions"
           cp target/release/stfn README.md LICENSE "dist/${name}/"
-          cp assets/screenshots/main.png "dist/${name}/assets/screenshots/"
+          cp assets/screenshots/*.png "dist/${name}/assets/screenshots/"
           if [ -f "docs/versions/${tag}.md" ]; then
             cp "docs/versions/${tag}.md" "dist/${name}/docs/versions/"
           fi

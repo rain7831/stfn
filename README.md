@@ -7,7 +7,9 @@
 
 当前版本：**v0.2.0** · [版本说明](docs/versions/v0.2.0.md) · [Releases](https://github.com/rain7831/stfn/releases)
 
-![STFN 主界面](assets/screenshots/main.png)
+| 主界面 | 设置页 |
+| :---: | :---: |
+| <img src="assets/screenshots/main.png" width="360" alt="STFN 主界面"> | <img src="assets/screenshots/settings.png" width="360" alt="STFN 设置页"> |
 
 ## 为什么用它
 
