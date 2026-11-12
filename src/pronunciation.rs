@@ -181,8 +181,13 @@ impl PronunciationService {
             return rx.await.ok().flatten();
         }
 
-        let result = self.fetch(&word).await;
-        {
+        let (result, cacheable) = match self.fetch(&word).await {
+            Ok(result) => (result, true),
+            Err(()) => (None, false),
+        };
+        // 只缓存确定结果（命中 / 404 / 无音标）。Cloudflare 挑战、超时、5xx
+        // 不能按 24h 缓存，否则一次瞬时失败会让整个会话都看不到音标。
+        if cacheable {
             let mut cache = lock(&self.dict);
             cache.put(
                 word.clone(),
@@ -281,31 +286,61 @@ impl PronunciationService {
         }
     }
 
-    // 词典请求：5s 超时；5xx/网络错误重试一次；404 与非单词直接缓存 None。
-    async fn fetch(&self, word: &str) -> Option<Pronunciation> {
+    // 词典请求：5s 超时；网络错误/5xx/403/429 重试一次；404 视为确定未命中。
+    // `Err(())` 表示瞬时失败，调用方不得缓存，下一次输入还有机会重试。
+    async fn fetch(&self, word: &str) -> Result<Option<Pronunciation>, ()> {
         let url = format!("{}{}", self.base_url, encode_segment(word));
         let mut attempt = 0;
         loop {
             attempt += 1;
-            let response = self.client.get(&url).timeout(LOOKUP_TIMEOUT).send().await;
+            let response = self
+                .client
+                .get(&url)
+                .header(reqwest::header::USER_AGENT, USER_AGENT)
+                .timeout(LOOKUP_TIMEOUT)
+                .send()
+                .await;
 
             match response {
                 Ok(response) if response.status().is_success() => {
-                    let bytes = response.bytes().await.ok()?;
-                    let entries: Vec<DictionaryEntry> = serde_json::from_slice(&bytes).ok()?;
-                    return parse_entries(&entries);
+                    tracing::debug!(status = %response.status(), "dictionary response");
+                    let bytes = match response.bytes().await {
+                        Ok(bytes) => bytes,
+                        Err(error) => {
+                            tracing::debug!(error = %error, "dictionary body failed");
+                            return Err(());
+                        }
+                    };
+                    return match serde_json::from_slice::<Vec<DictionaryEntry>>(&bytes) {
+                        Ok(entries) => Ok(parse_entries(&entries)),
+                        Err(error) => {
+                            tracing::debug!(error = %error, "dictionary parse failed");
+                            Err(())
+                        }
+                    };
                 }
-                Ok(response) if response.status().is_server_error() && attempt == 1 => {
+                Ok(response) if response.status() == reqwest::StatusCode::NOT_FOUND => {
+                    tracing::debug!("dictionary word not found");
+                    return Ok(None);
+                }
+                Ok(response) if retryable_status(response.status()) && attempt == 1 => {
+                    tracing::debug!(status = %response.status(), "dictionary retryable status");
+                    tokio::time::sleep(Duration::from_millis(300)).await;
                     continue;
                 }
-                Ok(_) => return None,
-                Err(error)
-                    if attempt == 1
-                        && (error.is_timeout() || error.is_connect() || error.is_request()) =>
-                {
+                Ok(response) => {
+                    tracing::debug!(status = %response.status(), "dictionary transient status");
+                    return Err(());
+                }
+                Err(error) if attempt == 1 && retryable_error(&error) => {
+                    tracing::debug!(error = %error, "dictionary retryable error");
+                    tokio::time::sleep(Duration::from_millis(300)).await;
                     continue;
                 }
-                Err(_) => return None,
+                Err(error) => {
+                    tracing::debug!(error = %error, "dictionary request failed");
+                    return Err(());
+                }
             }
         }
     }
@@ -340,6 +375,14 @@ impl PronunciationService {
         }
         Some(bytes.to_vec())
     }
+}
+
+fn retryable_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 403 | 429 | 500..=599)
+}
+
+fn retryable_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect() || error.is_request()
 }
 
 #[derive(Debug, Deserialize)]
