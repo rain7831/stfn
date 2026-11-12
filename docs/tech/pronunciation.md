@@ -37,22 +37,29 @@ GET https://api.dictionaryapi.dev/api/v2/entries/en/<word>
 - 仅英文单词有效；404/非单词 → 不显示。
 - 数据为 CC BY-SA 3.0；音频为 CC BY / BY-SA；README 与设置页需要 attribution。
 
-### 3.2 音频兜底：Edge TTS
+### 3.2 音频兜底：有道 -> Edge TTS
 
-- crate：`msedge-tts`（`synthesize` 返回 `SynthesizedAudio.audio_bytes`）。
-- 非官方、无 key；仅作为**真人音频缺失**时的兜底。
-- 默认音色：
-  - US：`en-US-AriaNeural`
-  - UK：`en-GB-SoniaNeural`
-- 音色选择在实现时从 `get_voices_list()` 校验；找不到时回退到第一个 `en-US` / `en-GB` 音色。
-- Edge TTS 调用是 blocking API，放在 `spawn_blocking` 或独立线程，不阻塞 GTK。
+- 词典没有真人音频或下载失败时，先请求有道词典发音：
+  ```http
+  GET https://dict.youdao.com/dictvoice?audio=<word>&type=1   # US
+  GET https://dict.youdao.com/dictvoice?audio=<word>&type=2   # UK
+  ```
+  返回 MP3，无 key；实测约 0.1–0.2s。
+- 有道也失败时才用 Edge TTS：
+  - crate：`msedge-tts`（`synthesize` 返回 `SynthesizedAudio.audio_bytes`）。
+  - 非官方、无 key。
+  - 默认音色：US `en-US-AriaNeural`，UK `en-GB-SoniaNeural`。
+  - 音色从 `get_voices_list()` 校验；找不到回退第一个 `en-US` / `en-GB` 音色。
+  - Edge TTS 调用是 blocking API，放在 `spawn_blocking` 或独立线程，不阻塞 GTK。
 
 ### 3.3 播放
 
 - `rodio` 0.23，启用 `mp3` feature。
-- 独立音频线程持有 `OutputStream`，通过 mpsc 接收 `Play(bytes)` / `Stop`；同一时间只播一个音频。
-- 音频按 `(word, accent, source)` 缓存字节，容量 64，进程退出即清空。
-- 播放失败只更新按钮状态，不弹全局错误。
+- 独立音频线程持有输出流，通过 mpsc 接收 `Play(bytes)` / `Stop`；同一时间只播一个音频。
+- Linux 上优先选择 cpal 的 `pipewire` / `pulse` 设备，避免直接打开 ALSA 硬件 PCM 绕过系统混音器。
+- 音频按 `(word, accent, source)` 缓存字节：LRU 64 条 + 8MiB 总字节 + 1h TTL，仅内存，进程退出即清空。
+- 词典命中后预加载可见 accent 的音频；预加载与点击共享单飞请求。
+- 播放失败保留播放按钮供重试，不弹全局错误。
 
 ## 4. 单词判定与解析
 
@@ -106,10 +113,11 @@ enum AudioSource {
 
 ### 4.3 音频 URL 与兜底
 
-- 有 `audio` URL：播放时下载并缓存。
-- 有 IPA 但无 audio：为对应 accent 生成 `EdgeTts` 源，播放时合成并缓存。
-- Edge TTS 失败：该 accent 的播放按钮隐藏；IPA 保留。
-- 词典查询失败：整个 pronunciation 为 `None`，UI 不占位。
+- 有 `audio` URL：优先下载并缓存真人音频。
+- 有 IPA 但无 audio：为对应 accent 生成 `Youdao` 源。
+- URL 下载失败：先回退有道；再有道失败才回退 Edge TTS。
+- 全部失败：保留播放按钮并提示可重试；IPA 保留。
+- 词典查询失败：整个 pronunciation 为 `None`，UI 不显示音标行。
 
 ## 5. 服务与缓存
 
@@ -129,8 +137,9 @@ impl PronunciationService {
 }
 ```
 
-- 词典缓存：容量 256，TTL 24h（内存）。
-- 音频缓存：容量 64，TTL 1h（内存）。
+- 词典缓存：容量 256，TTL 24h（内存）；瞬时失败不缓存。
+- 音频缓存：LRU 64 条 + 8MiB 总字节 + TTL 1h（内存，不落盘）。
+- 预加载：词典结果返回后按 US -> UK 顺序后台预取；点击若仍在下载则等待同一个单飞请求。
 - `lookup` 超时 5s；5xx 重试一次；404 直接缓存 `None`。
 - 同一单词的并发查询做 in-flight 去重（`HashMap<String, Vec<oneshot::Sender>>` 或单飞 Future）。
 - 不记录用户单词到日志；只记录 `provider=dictionary, status, latency`。
@@ -173,10 +182,17 @@ US /həˈloʊ/  ▶      UK /həˈləʊ/  ▶
 
 - 每个 accent 显示 `US`/`UK` + IPA + 播放按钮。
 - 播放中按钮切换为停止/加载；再次点击停止。
-- 只有 IPA 无音频：显示 IPA，播放按钮隐藏。
+- 失败回到 ▶，tooltip 提示“发音加载失败，点击重试”，不隐藏。
 - 只有 generic：显示“音标”+播放。
 - 文本长度/卡片宽度不足时 IPA 可换行；播放按钮固定在右侧。
 - 使用主题色，不使用硬编码灰色；音标次要但可读。
+
+### 6.4 句子级朗读
+
+- 英译中：输入是英文但不是单个单词时，输入卡片下方显示“朗读原文 ▶”。
+- 中译英：译文是英文但不是单个单词时，结果卡片 header 显示“朗读译文”按钮。
+- 使用 Edge TTS，默认 US；Edge 失败时用有道发音兜底。不预加载、不做句子音频缓存；点击后合成播放。
+- 不产生句子级 IPA；失败保留按钮可重试。
 
 ## 7. 并发与事件
 
@@ -231,7 +247,9 @@ US /həˈloʊ/  ▶      UK /həˈləʊ/  ▶
 - [ ] 英译中句子/短语：不显示音标，不请求词典。
 - [ ] 中译英每个结果卡片：英文单词各自显示 IPA；译文不同各显示各的。
 - [ ] 中译英句子/短语/未命中：该卡片不显示。
-- [ ] 词典有 IPA 无音频：Edge TTS 兜底；失败则隐藏播放。
+- [ ] 词典有 IPA 无音频：有道兜底；再有道失败才 Edge TTS。
+- [ ] 单词音频预加载后点击可立即播放；缓存不写磁盘。
+- [ ] 非单词英文文本可整句朗读。
 - [ ] 不显示中文拼音。
 - [ ] 主题切换下 accent 行可读。
 - [ ] 缓存命中不重复请求；错误不阻塞翻译。

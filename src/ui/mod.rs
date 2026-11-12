@@ -17,7 +17,7 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 
 use crate::cli::GuiIntent;
-use crate::config::{self, Config};
+use crate::config::{self, ColorScheme, Config};
 use crate::lang::{self, Detection, Lang};
 use crate::pronunciation::{
     self, Accent, AccentPronunciation, AudioSource, Pronunciation, PronunciationService,
@@ -95,6 +95,26 @@ enum AudioState {
     Idle,
     Loading,
     Playing,
+}
+
+/// 音频控件的最小状态接口；单词 accent 行和句子朗读按钮共用。
+trait AudioControl {
+    fn audio_state(&self) -> AudioState;
+    fn set_audio_state(&self, state: AudioState);
+    fn set_error_hint(&self);
+    fn epoch(&self) -> u64;
+    fn play_seq(&self) -> u64;
+    fn bump_play_seq(&self) -> u64;
+}
+
+type AudioControls = Rc<RefCell<HashMap<u64, Rc<dyn AudioControl>>>>;
+
+/// 句子朗读请求：文本 + epoch/seq 防止旧文本的结果覆盖新状态。
+#[derive(Debug, Clone)]
+struct SpeechRequest {
+    token: u64,
+    epoch: u64,
+    text: String,
 }
 
 /// 播放请求：token/epoch 把异步结果映射回当前按钮，避免旧单词覆盖新状态。
@@ -249,9 +269,33 @@ impl AccentSlot {
         *self.data.source.borrow_mut() = None;
         self.state.set(AudioState::Idle);
     }
+}
 
-    fn state(&self) -> AudioState {
+impl AudioControl for AccentSlot {
+    fn audio_state(&self) -> AudioState {
         self.state.get()
+    }
+
+    fn set_audio_state(&self, state: AudioState) {
+        self.set_state(state);
+    }
+
+    fn set_error_hint(&self) {
+        AccentSlot::set_error_hint(self);
+    }
+
+    fn epoch(&self) -> u64 {
+        self.data.epoch.get()
+    }
+
+    fn play_seq(&self) -> u64 {
+        self.data.play_seq.get()
+    }
+
+    fn bump_play_seq(&self) -> u64 {
+        let seq = self.data.play_seq.get() + 1;
+        self.data.play_seq.set(seq);
+        seq
     }
 }
 
@@ -263,7 +307,7 @@ struct PronunciationView {
 
 impl PronunciationView {
     fn new(
-        registry: &Rc<RefCell<HashMap<u64, Rc<AccentSlot>>>>,
+        registry: &AudioControls,
         next_token: &Rc<Cell<u64>>,
         on_play: Rc<dyn Fn(PlayRequest)>,
     ) -> Rc<Self> {
@@ -279,7 +323,9 @@ impl PronunciationView {
             next_token.set(token);
             let slot = AccentSlot::new(token, accent, on_play.clone());
             root.append(&slot.root);
-            registry.borrow_mut().insert(token, slot.clone());
+            registry
+                .borrow_mut()
+                .insert(token, slot.clone() as Rc<dyn AudioControl>);
             slots.push(slot);
         }
 
@@ -326,12 +372,179 @@ impl PronunciationView {
         self.root.set_visible(false);
     }
 
-    fn unregister(&self, registry: &Rc<RefCell<HashMap<u64, Rc<AccentSlot>>>>) {
+    fn unregister(&self, registry: &AudioControls) {
         self.clear();
         let mut registry = registry.borrow_mut();
         for slot in &self.slots {
             registry.remove(&slot.token);
         }
+    }
+}
+
+#[derive(Clone, Default)]
+/// 句子朗读按钮共享给点击/异步事件的状态。
+struct SpeechData {
+    text: Rc<RefCell<String>>,
+    epoch: Rc<Cell<u64>>,
+    play_seq: Rc<Cell<u64>>,
+}
+
+/// 句子级朗读按钮：可选文字标签 + 播放/停止/加载；文本由结果区更新。
+struct SpeechButton {
+    token: u64,
+    root: gtk::Box,
+    button: gtk::Button,
+    spinner: gtk::Spinner,
+    data: SpeechData,
+    state: Cell<AudioState>,
+    tooltip: &'static str,
+}
+
+impl SpeechButton {
+    fn new(
+        label: Option<&str>,
+        tooltip: &'static str,
+        registry: &AudioControls,
+        next_token: &Rc<Cell<u64>>,
+        on_play: Rc<dyn Fn(SpeechRequest)>,
+    ) -> Rc<Self> {
+        let root = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        root.set_valign(gtk::Align::Center);
+        root.set_visible(false);
+
+        if let Some(label) = label {
+            root.set_margin_start(12);
+            let widget = gtk::Label::new(Some(label));
+            set_label_font(&widget, 12, false);
+            widget.add_css_class("dim-label");
+            root.append(&widget);
+        }
+
+        let token = next_token.get() + 1;
+        next_token.set(token);
+
+        let button = gtk::Button::from_icon_name("media-playback-start-symbolic");
+        button.set_has_frame(false);
+        button.set_valign(gtk::Align::Center);
+        button.set_tooltip_text(Some(tooltip));
+        button.set_visible(false);
+        root.append(&button);
+
+        let spinner = gtk::Spinner::new();
+        spinner.set_size_request(14, 14);
+        spinner.set_valign(gtk::Align::Center);
+        spinner.set_visible(false);
+        root.append(&spinner);
+
+        let data = SpeechData::default();
+        let click_data = data.clone();
+        let on_play_click = on_play.clone();
+        button.connect_clicked(move |_| {
+            let text = click_data.text.borrow().clone();
+            if text.is_empty() {
+                return;
+            }
+            on_play_click(SpeechRequest {
+                token,
+                epoch: click_data.epoch.get(),
+                text,
+            });
+        });
+
+        let this = Rc::new(Self {
+            token,
+            root,
+            button,
+            spinner,
+            data,
+            state: Cell::new(AudioState::Idle),
+            tooltip,
+        });
+        registry
+            .borrow_mut()
+            .insert(token, this.clone() as Rc<dyn AudioControl>);
+        this
+    }
+
+    fn set_text(&self, text: &str) {
+        *self.data.text.borrow_mut() = text.to_string();
+        self.data.epoch.set(self.data.epoch.get() + 1);
+        self.data.play_seq.set(self.data.play_seq.get() + 1);
+        self.root.set_visible(true);
+        self.set_state(AudioState::Idle);
+    }
+
+    fn set_state(&self, state: AudioState) {
+        self.state.set(state);
+        self.spinner.stop();
+        match state {
+            AudioState::Idle => {
+                self.spinner.set_visible(false);
+                self.button.set_visible(!self.data.text.borrow().is_empty());
+                self.button.set_icon_name("media-playback-start-symbolic");
+                self.button.set_tooltip_text(Some(self.tooltip));
+            }
+            AudioState::Loading => {
+                self.button.set_visible(false);
+                self.spinner.set_visible(true);
+                self.spinner.start();
+            }
+            AudioState::Playing => {
+                self.spinner.set_visible(false);
+                self.button.set_visible(true);
+                self.button.set_icon_name("media-playback-stop-symbolic");
+                self.button.set_tooltip_text(Some("停止朗读"));
+            }
+        }
+    }
+
+    fn set_error_hint(&self) {
+        self.button.set_visible(!self.data.text.borrow().is_empty());
+        self.button.set_tooltip_text(Some("朗读失败，点击重试"));
+    }
+
+    fn clear(&self) {
+        self.root.set_visible(false);
+        self.data.text.borrow_mut().clear();
+        self.data.epoch.set(self.data.epoch.get() + 1);
+        self.data.play_seq.set(self.data.play_seq.get() + 1);
+        self.spinner.stop();
+        self.spinner.set_visible(false);
+        self.button.set_visible(false);
+        self.state.set(AudioState::Idle);
+    }
+
+    fn unregister(&self, registry: &AudioControls) {
+        self.clear();
+        registry.borrow_mut().remove(&self.token);
+    }
+}
+
+impl AudioControl for SpeechButton {
+    fn audio_state(&self) -> AudioState {
+        self.state.get()
+    }
+
+    fn set_audio_state(&self, state: AudioState) {
+        self.set_state(state);
+    }
+
+    fn set_error_hint(&self) {
+        SpeechButton::set_error_hint(self);
+    }
+
+    fn epoch(&self) -> u64 {
+        self.data.epoch.get()
+    }
+
+    fn play_seq(&self) -> u64 {
+        self.data.play_seq.get()
+    }
+
+    fn bump_play_seq(&self) -> u64 {
+        let seq = self.data.play_seq.get() + 1;
+        self.data.play_seq.set(seq);
+        seq
     }
 }
 
@@ -341,6 +554,7 @@ struct ProviderRow {
     root: gtk::Box,
     spinner: gtk::Spinner,
     pronunciation: Rc<PronunciationView>,
+    speech: Rc<SpeechButton>,
     body: gtk::Label,
     error: gtk::Label,
     copy: gtk::Button,
@@ -351,7 +565,12 @@ struct ProviderRow {
 // 结果卡片构建与状态切换（loading/result/error/clear）。
 impl ProviderRow {
     /// 构建卡片；retry 回调由外层注入，复制按钮自带 1.2s 勾选反馈。
-    fn new(id: &'static str, on_retry: Rc<dyn Fn()>, pronunciation: Rc<PronunciationView>) -> Self {
+    fn new(
+        id: &'static str,
+        on_retry: Rc<dyn Fn()>,
+        pronunciation: Rc<PronunciationView>,
+        speech: Rc<SpeechButton>,
+    ) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
         root.add_css_class("card");
         root.set_size_request(-1, 100);
@@ -371,6 +590,9 @@ impl ProviderRow {
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
         header.append(&spacer);
+
+        // 非单词英文译文在 header 提供“朗读译文”按钮。
+        header.append(&speech.root);
 
         let copy = gtk::Button::from_icon_name("edit-copy-symbolic");
         copy.set_has_frame(false);
@@ -443,6 +665,7 @@ impl ProviderRow {
             root,
             spinner,
             pronunciation,
+            speech,
             body,
             error,
             copy,
@@ -458,6 +681,7 @@ impl ProviderRow {
         self.retry.set_visible(false);
         self.error.set_visible(false);
         self.pronunciation.clear();
+        self.speech.clear();
         if self.text.borrow().is_empty() {
             self.body.set_text("翻译中…");
         }
@@ -474,6 +698,12 @@ impl ProviderRow {
         self.body.set_opacity(1.0);
         *self.text.borrow_mut() = output.text.clone();
         self.copy.set_visible(true);
+
+        if lang::detect(&output.text) == Detection::En && !pronunciation::is_word(&output.text) {
+            self.speech.set_text(output.text.trim());
+        } else {
+            self.speech.clear();
+        }
     }
 
     /// 失败态：显示脱敏错误并露出重试按钮。
@@ -484,6 +714,7 @@ impl ProviderRow {
         self.error.set_visible(true);
         self.retry.set_visible(true);
         self.pronunciation.clear();
+        self.speech.clear();
         self.body.set_opacity(0.6);
     }
 
@@ -497,6 +728,7 @@ impl ProviderRow {
         self.body.set_opacity(1.0);
         self.copy.set_visible(false);
         self.pronunciation.clear();
+        self.speech.clear();
         self.text.borrow_mut().clear();
     }
 }
@@ -646,14 +878,17 @@ struct UiState {
     settings_page: RefCell<Option<adw::NavigationPage>>,
     settings_dirty: Rc<Cell<bool>>,
     settings_save: RefCell<Option<Rc<dyn Fn()>>>,
-    // 英译中源单词音标行（输入卡片下方）。
+    // 英译中源单词音标行 + 句子朗读按钮（输入卡片下方）。
     input_pronunciation: Rc<PronunciationView>,
+    input_speech: Rc<SpeechButton>,
     pronunciation: Arc<PronunciationService>,
-    // accent token -> 控件；异步播放状态按 token 回写。
-    slots: Rc<RefCell<HashMap<u64, Rc<AccentSlot>>>>,
+    // audio token -> 控件（accent 行或句子朗读按钮）；异步状态按 token 回写。
+    slots: AudioControls,
     next_slot: Rc<Cell<u64>>,
     on_play: Rc<dyn Fn(PlayRequest)>,
     play_rx: RefCell<Option<async_channel::Receiver<PlayRequest>>>,
+    on_speech: Rc<dyn Fn(SpeechRequest)>,
+    speech_rx: RefCell<Option<async_channel::Receiver<SpeechRequest>>>,
     audio_player: RefCell<Option<AudioPlayer>>,
     // 选区注入文本时抑制 buffer changed 的 debounce。
     injecting: Cell<bool>,
@@ -665,6 +900,7 @@ impl UiState {
     fn new(app: &adw::Application) -> Rc<Self> {
         install_css();
         let loaded = config::load();
+        apply_color_scheme(loaded.config.general.color_scheme);
         let (credentials, _) = secrets::load();
 
         let client = reqwest::Client::builder()
@@ -752,16 +988,27 @@ impl UiState {
         let on_play: Rc<dyn Fn(PlayRequest)> = Rc::new(move |request| {
             let _ = play_tx.try_send(request);
         });
-        let slots: Rc<RefCell<HashMap<u64, Rc<AccentSlot>>>> =
-            Rc::new(RefCell::new(HashMap::new()));
+        let (speech_tx, speech_rx) = async_channel::unbounded::<SpeechRequest>();
+        let on_speech: Rc<dyn Fn(SpeechRequest)> = Rc::new(move |request| {
+            let _ = speech_tx.try_send(request);
+        });
+        let slots: AudioControls = Rc::new(RefCell::new(HashMap::new()));
         let next_slot = Rc::new(Cell::new(0));
         let input_pronunciation = PronunciationView::new(&slots, &next_slot, on_play.clone());
+        let input_speech = SpeechButton::new(
+            Some("朗读原文"),
+            "朗读原文",
+            &slots,
+            &next_slot,
+            on_speech.clone(),
+        );
 
         let input_section = gtk::Box::new(gtk::Orientation::Vertical, 10);
         input_section.set_vexpand(false);
         input_section.append(&input_header);
         input_section.append(&input_card);
         input_section.append(&input_pronunciation.root);
+        input_section.append(&input_speech.root);
 
         let divider = gtk::Separator::new(gtk::Orientation::Horizontal);
         divider.set_margin_top(2);
@@ -846,11 +1093,14 @@ impl UiState {
             settings_dirty: Rc::new(Cell::new(false)),
             settings_save: RefCell::new(None),
             input_pronunciation,
+            input_speech,
             pronunciation: Arc::new(PronunciationService::new(client)),
             slots,
             next_slot,
             on_play,
             play_rx: RefCell::new(Some(play_rx)),
+            on_speech,
+            speech_rx: RefCell::new(Some(speech_rx)),
             audio_player: RefCell::new(None),
             injecting: Cell::new(false),
         });
@@ -973,6 +1223,15 @@ impl UiState {
                 }
             });
         }
+
+        if let Some(rx) = self.speech_rx.borrow_mut().take() {
+            let state = self.clone();
+            glib::spawn_future_local(async move {
+                while let Ok(request) = rx.recv().await {
+                    state.play_speech(request);
+                }
+            });
+        }
     }
 
     /// 输入变化：更新方向 badge，空/不支持时清空；自动翻译开启时重置去抖。
@@ -981,6 +1240,11 @@ impl UiState {
         let detection = lang::detect(&text);
         self.update_direction(detection);
         self.input_pronunciation.clear();
+        if detection == Detection::En && !pronunciation::is_word(&text) {
+            self.input_speech.set_text(text.trim());
+        } else {
+            self.input_speech.clear();
+        }
         // 新输入立即让旧 generation 的翻译/音标结果失效，不必等下一次翻译。
         self.generation.set(self.generation.get() + 1);
 
@@ -1158,6 +1422,7 @@ impl UiState {
             let rows = self.rows.borrow();
             for row in rows.iter() {
                 row.pronunciation.unregister(&self.slots);
+                row.speech.unregister(&self.slots);
             }
         }
         self.rows.borrow_mut().clear();
@@ -1166,7 +1431,19 @@ impl UiState {
             let state = self.clone();
             let pronunciation =
                 PronunciationView::new(&self.slots, &self.next_slot, self.on_play.clone());
-            let row = ProviderRow::new(id, Rc::new(move || state.translate_now()), pronunciation);
+            let speech = SpeechButton::new(
+                None,
+                "朗读译文",
+                &self.slots,
+                &self.next_slot,
+                self.on_speech.clone(),
+            );
+            let row = ProviderRow::new(
+                id,
+                Rc::new(move || state.translate_now()),
+                pronunciation,
+                speech,
+            );
             self.results_box.append(&row.root);
             self.rows.borrow_mut().push(row);
         }
@@ -1319,22 +1596,21 @@ impl UiState {
 
     /// 播放按钮点击：正在播放则停止，否则取音频字节；失败隐藏按钮。
     fn play_audio(&self, request: PlayRequest) {
-        let Some(slot) = self.slots.borrow().get(&request.token).cloned() else {
+        let Some(handle) = self.slots.borrow().get(&request.token).cloned() else {
             return;
         };
-        match slot.state() {
+        match handle.audio_state() {
             AudioState::Playing => {
                 // 先递增 seq 让在途事件失效，再让音频线程停止当前音频。
-                slot.data.play_seq.set(slot.data.play_seq.get() + 1);
+                handle.bump_play_seq();
                 if let Some(player) = self.audio_player.borrow().as_ref() {
                     player.stop(request.token);
                 }
-                slot.set_state(AudioState::Idle);
+                handle.set_audio_state(AudioState::Idle);
             }
             AudioState::Idle => {
-                slot.set_state(AudioState::Loading);
-                let seq = slot.data.play_seq.get() + 1;
-                slot.data.play_seq.set(seq);
+                handle.set_audio_state(AudioState::Loading);
+                let seq = handle.bump_play_seq();
                 let service = self.pronunciation.clone();
                 let tx = self.event_tx.clone();
                 let token = request.token;
@@ -1357,23 +1633,60 @@ impl UiState {
         }
     }
 
-    /// 音频字节就绪：epoch/seq 已变化说明单词或播放请求已换，丢弃旧结果。
-    fn apply_audio_ready(&self, token: u64, epoch: u64, seq: u64, result: Option<Arc<Vec<u8>>>) {
-        let Some(slot) = self.slots.borrow().get(&token).cloned() else {
+    /// 句子朗读：点击后 Edge TTS 合成整句；不预加载、不缓存。
+    fn play_speech(&self, request: SpeechRequest) {
+        let Some(handle) = self.slots.borrow().get(&request.token).cloned() else {
             return;
         };
-        if slot.data.epoch.get() != epoch || slot.data.play_seq.get() != seq {
+        match handle.audio_state() {
+            AudioState::Playing => {
+                handle.bump_play_seq();
+                if let Some(player) = self.audio_player.borrow().as_ref() {
+                    player.stop(request.token);
+                }
+                handle.set_audio_state(AudioState::Idle);
+            }
+            AudioState::Idle => {
+                handle.set_audio_state(AudioState::Loading);
+                let seq = handle.bump_play_seq();
+                let service = self.pronunciation.clone();
+                let tx = self.event_tx.clone();
+                let token = request.token;
+                let epoch = request.epoch;
+                self.runtime.spawn(async move {
+                    let audio = service.synthesize_text(&request.text, Accent::Us).await;
+                    let result = audio.map(Arc::new);
+                    let _ = tx
+                        .send(UiEvent::AudioReady {
+                            token,
+                            epoch,
+                            seq,
+                            result,
+                        })
+                        .await;
+                });
+            }
+            AudioState::Loading => {}
+        }
+    }
+
+    /// 音频字节就绪：epoch/seq 已变化说明单词或播放请求已换，丢弃旧结果。
+    fn apply_audio_ready(&self, token: u64, epoch: u64, seq: u64, result: Option<Arc<Vec<u8>>>) {
+        let Some(handle) = self.slots.borrow().get(&token).cloned() else {
+            return;
+        };
+        if handle.epoch() != epoch || handle.play_seq() != seq {
             return;
         }
         match result {
             Some(bytes) => {
-                slot.set_state(AudioState::Playing);
+                handle.set_audio_state(AudioState::Playing);
                 self.audio_player().play(token, seq, bytes.as_ref().clone());
             }
             None => {
                 tracing::debug!(token, "audio unavailable, keeping play button for retry");
-                slot.set_state(AudioState::Idle);
-                slot.set_error_hint();
+                handle.set_audio_state(AudioState::Idle);
+                handle.set_error_hint();
             }
         }
     }
@@ -1400,23 +1713,23 @@ impl UiState {
             | AudioEvent::Stopped { token, seq }
             | AudioEvent::Failed { token, seq } => (token, seq),
         };
-        let Some(slot) = self.slots.borrow().get(&token).cloned() else {
+        let Some(handle) = self.slots.borrow().get(&token).cloned() else {
             return;
         };
-        if slot.data.play_seq.get() != seq {
+        if handle.play_seq() != seq {
             return;
         }
         match event {
             AudioEvent::Finished { .. } | AudioEvent::Stopped { .. } => {
-                slot.set_state(AudioState::Idle);
+                handle.set_audio_state(AudioState::Idle);
             }
             AudioEvent::Failed { .. } => {
                 tracing::debug!(
                     token,
                     "audio playback failed, keeping play button for retry"
                 );
-                slot.set_state(AudioState::Idle);
-                slot.set_error_hint();
+                handle.set_audio_state(AudioState::Idle);
+                handle.set_error_hint();
             }
         }
     }
@@ -1530,12 +1843,14 @@ impl UiState {
     /// 设置保存后重新加载配置/密钥，刷新 provider 卡片和延迟行为。
     fn reload(self: &Rc<Self>) {
         let loaded = config::load();
+        let scheme = loaded.config.general.color_scheme;
         *self.config.borrow_mut() = loaded.config;
         let (credentials, _) = secrets::load();
         *self.credentials.borrow_mut() = credentials;
         if !self.config.borrow().general.auto_translate {
             self.cancel_debounce();
         }
+        apply_color_scheme(scheme);
         self.rebuild_rows();
         self.update_auto_ui();
     }
@@ -1624,6 +1939,22 @@ fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
     spin.set_sensitive(auto.is_active());
     general_group.add(&spin);
     page.add(&general_group);
+
+    // 外观：跟随系统 / 强制浅色 / 强制深色；保存后立即应用。
+    let appearance_group = adw::PreferencesGroup::new();
+    appearance_group.set_title("外观");
+    let color_scheme = adw::ComboRow::new();
+    color_scheme.set_title("颜色方案");
+    color_scheme.set_subtitle("默认跟随系统；保存后立即生效");
+    let scheme_model = gtk::StringList::new(&["跟随系统", "浅色", "深色"]);
+    color_scheme.set_model(Some(&scheme_model));
+    color_scheme.set_selected(match state.config.borrow().general.color_scheme {
+        ColorScheme::Default => 0,
+        ColorScheme::Light => 1,
+        ColorScheme::Dark => 2,
+    });
+    appearance_group.add(&color_scheme);
+    page.add(&appearance_group);
 
     // 翻译源：Bing 开关；火山/阿里用 ExpanderRow 把密钥收在厂商开关下面。
     let providers_group = adw::PreferencesGroup::new();
@@ -1726,7 +2057,7 @@ fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
     about_group.set_title("数据来源");
     let attribution = gtk::Label::new(Some(
         "英文音标与真人发音来自 dictionaryapi.dev（CC BY-SA 3.0）。\n\
-         有道词典发音作为单词音频优先兜底；Edge TTS（非官方 Microsoft Read Aloud 接口）仅在两者不可用时兜底。",
+         单词音频优先有道词典发音；句子朗读优先 Edge TTS（非官方 Microsoft Read Aloud 接口），失败时用有道兜底。",
     ));
     attribution.set_wrap(true);
     attribution.set_xalign(0.0);
@@ -1751,6 +2082,9 @@ fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
 
     let dirty_for_bing = dirty.clone();
     bing.connect_active_notify(move |_| dirty_for_bing.set(true));
+
+    let dirty_for_scheme = dirty.clone();
+    color_scheme.connect_selected_notify(move |_| dirty_for_scheme.set(true));
 
     let volc_for_toggle = volc.clone();
     let dirty_for_volc = dirty.clone();
@@ -1784,6 +2118,11 @@ fn build_settings(state: &Rc<UiState>) -> (adw::NavigationPage, Rc<dyn Fn()>) {
         let mut config = state_for_save.config.borrow().clone();
         config.general.auto_translate = auto.is_active();
         config.general.debounce_ms = spin.value().round() as u64;
+        config.general.color_scheme = match color_scheme.selected() {
+            1 => ColorScheme::Light,
+            2 => ColorScheme::Dark,
+            _ => ColorScheme::Default,
+        };
         config.providers.bing.enabled = bing.is_active();
         config.providers.volcengine.enabled = volc.enables_expansion();
         config.providers.alibaba.enabled = alibaba.enables_expansion();
@@ -1910,6 +2249,16 @@ fn text_view_text(view: &gtk::TextView) -> String {
     buffer
         .text(&buffer.start_iter(), &buffer.end_iter(), true)
         .to_string()
+}
+
+/// 把配置的手动配色应用到 libadwaita；default 表示跟随系统。
+fn apply_color_scheme(scheme: ColorScheme) {
+    let scheme = match scheme {
+        ColorScheme::Default => adw::ColorScheme::Default,
+        ColorScheme::Light => adw::ColorScheme::ForceLight,
+        ColorScheme::Dark => adw::ColorScheme::ForceDark,
+    };
+    adw::StyleManager::default().set_color_scheme(scheme);
 }
 
 /// 给 GtkTextView 设置 16px 字号和透明背景，避免和结果字号不一致。

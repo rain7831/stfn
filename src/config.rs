@@ -63,6 +63,40 @@ impl Target {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
+/// 界面配色：跟随系统 / 强制浅色 / 强制深色。
+pub enum ColorScheme {
+    #[default]
+    Default,
+    Light,
+    Dark,
+}
+
+impl<'de> Deserialize<'de> for ColorScheme {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "light" => Self::Light,
+            "dark" => Self::Dark,
+            _ => Self::Default,
+        })
+    }
+}
+
+impl ColorScheme {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
 /// CLI/配置中的默认翻译源。
 pub enum SourceChoice {
     #[default]
@@ -106,6 +140,7 @@ pub struct GeneralConfig {
     pub debounce_ms: u64,
     pub target: Target,
     pub default_source: SourceChoice,
+    pub color_scheme: ColorScheme,
 }
 
 impl Default for GeneralConfig {
@@ -115,6 +150,7 @@ impl Default for GeneralConfig {
             debounce_ms: 700,
             target: Target::Auto,
             default_source: SourceChoice::Bing,
+            color_scheme: ColorScheme::Default,
         }
     }
 }
@@ -221,19 +257,22 @@ pub fn load() -> LoadedConfig {
         config
     } else {
         match fs::read_to_string(&path) {
-            Ok(text) => match toml::from_str::<Config>(&text) {
-                Ok(mut config) => {
-                    validate(&mut config, &mut warnings);
-                    config
+            Ok(text) => {
+                warn_unknown_color_scheme(&text, &mut warnings);
+                match toml::from_str::<Config>(&text) {
+                    Ok(mut config) => {
+                        validate(&mut config, &mut warnings);
+                        config
+                    }
+                    Err(err) => {
+                        backup(&path);
+                        warnings.push(format!("配置解析失败，已备份并使用默认值：{err}"));
+                        let config = Config::default();
+                        let _ = save(&config);
+                        config
+                    }
                 }
-                Err(err) => {
-                    backup(&path);
-                    warnings.push(format!("配置解析失败，已备份并使用默认值：{err}"));
-                    let config = Config::default();
-                    let _ = save(&config);
-                    config
-                }
-            },
+            }
             Err(err) => {
                 warnings.push(format!("无法读取配置，使用默认值：{err}"));
                 Config::default()
@@ -242,6 +281,23 @@ pub fn load() -> LoadedConfig {
     };
 
     LoadedConfig { config, warnings }
+}
+
+// 手动配色是新增字段；未知值会被反序列化为 default，这里补一条提示。
+fn warn_unknown_color_scheme(text: &str, warnings: &mut Vec<String>) {
+    let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
+        return;
+    };
+    let Some(scheme) = doc
+        .get("general")
+        .and_then(|general| general.get("color_scheme"))
+        .and_then(|value| value.as_str())
+    else {
+        return;
+    };
+    if !matches!(scheme, "default" | "light" | "dark") {
+        warnings.push(format!("color_scheme={scheme} 未知，已回退为 default"));
+    }
 }
 
 // 容错校验：版本和延迟范围；配置错误不应阻塞启动。
@@ -290,6 +346,7 @@ pub fn save(config: &Config) -> std::io::Result<()> {
         "default_source",
         value(config.general.default_source.as_str()),
     );
+    general.insert("color_scheme", value(config.general.color_scheme.as_str()));
 
     let providers = ensure_table(&mut doc, "providers");
     providers.set_implicit(true);

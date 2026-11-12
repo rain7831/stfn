@@ -25,6 +25,7 @@
 - 英文音标与发音：仅单词级。英译中显示在输入框下方；中译英按每个平台的译文显示在厂商标题下，不同平台的音标互不影响。
 - 词典没有真人音频时优先用有道词典发音，仍不可用才用 Edge TTS 兜底；查不到或不是单词时不占位，不显示拼音。
 - 单词命中后会在后台预加载 US/UK 发音；点击时若仍在下载则等待同一个请求，不重复下载。
+- 非单词英文文本（句子/短语）在输入卡片下方或结果卡片 header 提供“朗读原文/朗读译文”按钮，使用 Edge TTS 整句朗读。
 - 音频只缓存在内存（LRU + 总字节上限，退出即清空），不写磁盘；预加载不会产生持久缓存文件。
 - 单个平台失败不影响其他行，该行显示错误并支持重试。
 - 结果文本可选中复制，每行结果提供复制按钮；Esc 清空输入，Ctrl+L 聚焦输入框。
@@ -36,7 +37,8 @@
 - Bing / 火山引擎 / 阿里云的启用状态与密钥；密钥配置在对应引擎开关打开后才展开。
 - 已保存的密钥显示为 `******`：不修改则保留，清空并保存则删除，输入新值则替换。
 - 修改未保存就返回或退出，会弹出确认框。
-- “数据来源”小组说明音标/音频由 dictionaryapi.dev 与 Edge TTS 提供。
+- 外观可选择“跟随系统 / 浅色 / 深色”，保存后立即生效。
+- “数据来源”小组说明音标/音频由 dictionaryapi.dev、有道词典与 Edge TTS 提供。
 - 密钥默认存入系统 Secret Service（gnome-keyring 等）；不可用时需明确允许后写入 `0600` 凭据文件。
 - 环境变量优先级最高；来自环境变量的密钥在 UI 中只读。
 - 密钥输入默认掩码，不写日志、不打印、不进入桌面通知。
@@ -112,6 +114,7 @@ auto_translate = true
 debounce_ms = 700
 target = "auto"          # auto | zh | en
 default_source = "bing"
+color_scheme = "default" # default | light | dark
 
 [providers.bing]
 enabled = true
@@ -203,7 +206,8 @@ v0.2 已实现：英文单词音标/发音（词典 + Edge TTS）、系统主题
 
 - 英文音标与真人发音来自 [dictionaryapi.dev](https://dictionaryapi.dev/)，数据采用 CC BY-SA 3.0，音频为 CC BY / BY-SA。
 - 词典没有真人音频时，优先使用有道词典发音（`dict.youdao.com/dictvoice`，US/UK 两种发音）。
-- 有道也不可用时，使用 Edge TTS（非官方 Microsoft Read Aloud 接口）兜底；音色优先使用 Edge 当前提供的 en-US / en-GB 语音。
+- 有道也不可用时，使用 Edge TTS（非官方 Microsoft Read Aloud 接口）兜底。
+- 句子级朗读优先使用 Edge TTS，失败时用有道发音兜底；句子音频不缓存。
 - dictionaryapi.dev、有道与 Edge TTS 都是在线服务，查询会把单词或待朗读文本发送给对应服务；STFN 不记录、不写磁盘缓存。
 
 ## License

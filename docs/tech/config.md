@@ -24,6 +24,7 @@ auto_translate = true
 debounce_ms = 700
 target = "auto"            # auto | zh | en
 default_source = "bing"    # bing | volcengine | alibaba | all
+color_scheme = "default"   # default | light | dark
 
 [providers.bing]
 enabled = true
@@ -47,6 +48,7 @@ enabled = false
 | `general.debounce_ms` | `700` | 200–2000 |
 | `general.target` | `"auto"` | `auto` 时按检测结果决定 |
 | `general.default_source` | `"bing"` | CLI 与 GUI 的默认源 |
+| `general.color_scheme` | `"default"` | `default` 跟随系统；`light`/`dark` 手动覆盖 |
 | `providers.bing.enabled` | `true` | 无密钥 |
 | `providers.volcengine.enabled` | `false` | 需要 Access Key / Secret Key |
 | `providers.alibaba.enabled` | `false` | 需要 AccessKey ID / Secret |
@@ -128,6 +130,7 @@ access_key_secret = "..."
 | 未知字段 | 忽略并记录 warn |
 | `debounce_ms` 越界 | 加载时 clamp 到 200–2000，并警告 |
 | `target` / `default_source` 非法 | 回退默认值并警告 |
+| `color_scheme` 非法 | 回退 `default` 并警告 |
 | 启用 provider 但缺密钥 | 配置仍加载；请求时该行报“缺少凭据” |
 | 所有 provider 关闭 | 允许；UI 显示空状态 |
 | 旧 `tencent` / `region` 字段 | 读取时忽略；保存时移除 |
@@ -184,6 +187,7 @@ auto_translate = false
 debounce_ms = 700
 target = "zh"
 default_source = "bing"
+color_scheme = "dark"
 
 [providers.bing]
 enabled = true

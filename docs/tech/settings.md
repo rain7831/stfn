@@ -23,6 +23,11 @@
 │  │ 延迟                      700 ms     │  │
 │  └──────────────────────────────────────┘  │
 │                                            │
+│  外观                                      │
+│  ┌──────────────────────────────────────┐  │
+│  │ 颜色方案       跟随系统 / 浅色 / 深色 │  │
+│  └──────────────────────────────────────┘  │
+│                                            │
 │  翻译源                                    │
 │  ┌──────────────────────────────────────┐  │
 │  │ Bing                          [开关] │  │
@@ -47,6 +52,7 @@
 | --- | --- | --- | --- |
 | `general.auto_translate` | `AdwSwitchRow` | `true` | 关闭后主窗口显示“翻译”按钮 |
 | `general.debounce_ms` | `AdwSpinRow` | `700` | 200–2000，步进 50 |
+| `general.color_scheme` | `AdwComboRow` | `default` | 跟随系统 / 浅色 / 深色 |
 | `providers.bing.enabled` | `AdwSwitchRow` | `true` | 无密钥 |
 | `providers.volcengine.enabled` | `AdwExpanderRow` 开关 | `false` | 开启时要求 Access Key / Secret Key |
 | `providers.alibaba.enabled` | `AdwExpanderRow` 开关 | `false` | 开启时要求 AccessKey ID / Secret |
@@ -110,12 +116,12 @@ access_key_secret = "..."
 
 ## 6. 保存流程
 
-1. 读取所有控件值，校验延迟、启用平台的密钥完整性。
+1. 读取所有控件值，校验延迟、启用平台的密钥完整性；外观选择写入 `general.color_scheme`。
 2. 若有新密钥且密钥环不可用，要求“允许保存到本地文件”已打开。
 3. 按第 4 节语义写入 / 删除 / 保留密钥。
 4. 用 `toml_edit` 读改写 `config.toml`，保留注释。
 5. 原子写：同目录临时文件 → `fsync` → `rename`。
-6. 更新内存配置与凭据，主窗口重建结果行。
+6. 更新内存配置与凭据；立即应用 `AdwStyleManager` 配色，主窗口重建结果行。
 7. 清除 dirty 状态，返回主页面。
 
 - 保存失败时保持设置页打开，并在“状态”组显示脱敏错误。
@@ -133,6 +139,7 @@ access_key_secret = "..."
 ## 8. 校验规则
 
 - `debounce_ms` ∈ [200, 2000]。
+- `color_scheme` ∈ {`default`, `light`, `dark`}；非法值回退 `default`。
 - 开启火山引擎：Access Key、Secret Key 必须已保存或本次填写。
 - 开启阿里云：AccessKey ID、AccessKey Secret 必须已保存或本次填写。
 - 无区域字段。
@@ -148,6 +155,7 @@ access_key_secret = "..."
 
 - [x] 齿轮 / `Ctrl+,` / `stfn settings` 都能切到设置页，不新开窗口
 - [x] 自动翻译与延迟可调
+- [x] 外观可手动选择跟随系统 / 浅色 / 深色，保存后立即生效
 - [x] 厂商开关打开后才显示密钥行
 - [x] 已保存密钥显示 `******`；不改动保留，清空删除，新值替换
 - [x] 环境变量密钥只读

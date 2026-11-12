@@ -379,6 +379,19 @@ impl PronunciationService {
             .await
     }
 
+    /// 句子级朗读：Edge TTS 优先，失败时用有道兜底；不预加载、不做句子缓存。
+    pub async fn synthesize_text(&self, text: &str, accent: Accent) -> Option<Vec<u8>> {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        if let Some(bytes) = self.tts.synthesize(text, accent).await {
+            return Some(bytes);
+        }
+        tracing::debug!("Edge TTS sentence failed, falling back to Youdao");
+        self.youdao_audio(text, accent).await
+    }
+
     fn cached(&self, word: &str) -> Option<Option<Pronunciation>> {
         let mut cache = lock(&self.dict);
         let now = Instant::now();
