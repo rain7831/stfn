@@ -28,7 +28,7 @@
 ```bash
 sudo pacman -S --needed base-devel rust gtk4 libadwaita alsa-lib
 git clone https://github.com/rain7831/stfn.git
-cd niri-trans
+cd stfn
 cargo build --release
 sudo install -Dm755 target/release/stfn /usr/local/bin/stfn
 ```
