@@ -121,7 +121,7 @@ access_key_secret = "..."
 3. 按第 4 节语义写入 / 删除 / 保留密钥。
 4. 用 `toml_edit` 读改写 `config.toml`，保留注释。
 5. 原子写：同目录临时文件 → `fsync` → `rename`。
-6. 更新内存配置与凭据；立即应用 `AdwStyleManager` 与手动主题覆盖（USER+1 加载 libadwaita 内置主题），主窗口重建结果行。
+6. 更新内存配置与凭据；立即应用 `AdwStyleManager` 与手动主题覆盖（USER+1 加载展开后的 libadwaita 内置主题），主窗口重建结果行。
 7. 清除 dirty 状态，返回主页面。
 
 - 保存失败时保持设置页打开，并在“状态”组显示脱敏错误。

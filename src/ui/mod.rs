@@ -2261,15 +2261,91 @@ thread_local! {
 // 优先级重新加载 libadwaita 自带主题（含 light/dark media query 与卡片规则），
 // 选 default 时移除，让系统主题重新接管。
 const ADWAITA_THEME_RESOURCE: &str = "/org/gnome/Adwaita/styles/gtk.css";
+const DARK_MEDIA: &str = "@media (prefers-color-scheme: dark)";
+
+/// 取出 libadwaita 内置主题，并按手动方案展开/移除 dark media query。
+///
+/// 直接注册带 `prefers-color-scheme` 的 provider 时，GTK 不会按
+/// `AdwStyleManager` 的手动模式重新求值，dark 仍会渲染成 light；这里把
+/// dark 块显式展开，light 则丢弃 dark 块。
+fn adwaita_theme_css(scheme: ColorScheme) -> Option<String> {
+    let bytes =
+        gio::resources_lookup_data(ADWAITA_THEME_RESOURCE, gio::ResourceLookupFlags::NONE).ok()?;
+    let css = std::str::from_utf8(bytes.as_ref())
+        .ok()?
+        // 资源 CSS 用相对 assets 路径；转成字符串加载后需要改成 resource://。
+        .replace(
+            "url(\"assets/",
+            "url(\"resource:///org/gnome/Adwaita/styles/assets/",
+        );
+    Some(match scheme {
+        ColorScheme::Default => return None,
+        ColorScheme::Light => transform_dark_media(&css, false),
+        ColorScheme::Dark => transform_dark_media(&css, true),
+    })
+}
+
+fn transform_dark_media(css: &str, keep_dark: bool) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut cursor = 0;
+    while let Some(relative) = css[cursor..].find(DARK_MEDIA) {
+        let start = cursor + relative;
+        let Some(open_relative) = css[start..].find('{') else {
+            break;
+        };
+        let open = start + open_relative;
+        let Some(close) = matching_brace(css, open) else {
+            break;
+        };
+        out.push_str(&css[cursor..start]);
+        if keep_dark {
+            out.push_str(&css[open + 1..close]);
+        }
+        cursor = close + 1;
+    }
+    out.push_str(&css[cursor..]);
+    out
+}
+
+fn matching_brace(css: &str, open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, ch) in css[open..].char_indices() {
+        if let Some(current) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == current {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(open + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
 
 /// 把配置的手动配色应用到 libadwaita；default 表示跟随系统。
 fn apply_color_scheme(scheme: ColorScheme) {
+    let manager = adw::StyleManager::default();
     let adw_scheme = match scheme {
         ColorScheme::Default => adw::ColorScheme::Default,
         ColorScheme::Light => adw::ColorScheme::ForceLight,
         ColorScheme::Dark => adw::ColorScheme::ForceDark,
     };
-    adw::StyleManager::default().set_color_scheme(adw_scheme);
+    manager.set_color_scheme(adw_scheme);
 
     let Some(display) = gtk::gdk::Display::default() else {
         return;
@@ -2281,11 +2357,11 @@ fn apply_color_scheme(scheme: ColorScheme) {
             gtk::style_context_remove_provider_for_display(&display, &provider);
         }
 
-        if scheme == ColorScheme::Default {
+        let Some(css) = adwaita_theme_css(scheme) else {
             return;
-        }
+        };
         let provider = gtk::CssProvider::new();
-        provider.load_from_resource(ADWAITA_THEME_RESOURCE);
+        provider.load_from_string(&css);
         gtk::style_context_add_provider_for_display(
             &display,
             &provider,
