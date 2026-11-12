@@ -200,7 +200,7 @@ cargo install --path .   # 从源码安装
 
 v0.1.0 已完成：翻译窗口 + 应用内设置 + Bing / 火山 / 阿里 + CLI 回显 / 通知 + 配置与密钥存储。版本总结见 `docs/versions/v0.1.0.md`。
 
-v0.2 已实现：英文单词音标/发音（词典 + Edge TTS）、系统主题审计、启动/选区注入聚焦、niri 选区翻译，并改为每次启动新进程；CLI 增加 `stfn selection`、`--speak` 与 JSON `phonetic`。设计见 `docs/tech/pronunciation.md`、`selection.md`、`v0.2-plan.md`。
+v0.2.0 已发布：单词音标/发音、句子级朗读、系统/手动主题、启动与选区注入聚焦、niri 选区翻译，并改为每次启动新进程；CLI 增加 `stfn selection`、`--speak` 与 JSON `phonetic`。版本总结见 `docs/versions/v0.2.0.md`。
 
 ## 数据来源
 
