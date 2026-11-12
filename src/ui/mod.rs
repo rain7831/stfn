@@ -1254,15 +1254,67 @@ impl UiState {
         let Some(pronunciation) = result else {
             return;
         };
-        match target {
-            PronunciationTarget::Input => self.input_pronunciation.set(word, &pronunciation),
+        let applied = match target {
+            PronunciationTarget::Input => {
+                self.input_pronunciation.set(word, &pronunciation);
+                true
+            }
             PronunciationTarget::Provider(id) => {
                 let rows = self.rows.borrow();
                 if let Some(row) = rows.iter().find(|row| row.id == id) {
                     row.pronunciation.set(word, &pronunciation);
+                    true
+                } else {
+                    false
                 }
             }
+        };
+
+        if applied {
+            self.preload_pronunciation(word, &pronunciation);
         }
+    }
+
+    /// 词典命中后立即在后台预加载可见 accent 的音频。
+    ///
+    /// 用户可能永远不点播放；预加载结果进入有上限的内存 LRU（不落盘），
+    /// 点击时若仍在下载，则通过 service 内单飞等待同一个结果。
+    fn preload_pronunciation(&self, word: &str, pronunciation: &Pronunciation) {
+        let use_generic = pronunciation.us.is_none() && pronunciation.uk.is_none();
+        let mut entries = Vec::new();
+        if let Some(entry) = &pronunciation.us {
+            entries.push((Accent::Us, entry));
+        }
+        if let Some(entry) = &pronunciation.uk {
+            entries.push((Accent::Uk, entry));
+        }
+        if use_generic {
+            if let Some(entry) = &pronunciation.generic {
+                // generic 使用 US 音色/缓存键，与 UI 的播放按钮一致。
+                entries.push((Accent::Us, entry));
+            }
+        }
+
+        if entries.is_empty() {
+            return;
+        }
+        let requests: Vec<(Accent, AudioSource)> = entries
+            .into_iter()
+            .filter_map(|(accent, entry)| entry.audio.clone().map(|source| (accent, source)))
+            .collect();
+        if requests.is_empty() {
+            return;
+        }
+
+        let service = self.pronunciation.clone();
+        let word = word.to_string();
+        // 一个单词一个任务，按 US -> UK 顺序预取；服务内 semaphore 再限制全局并发。
+        // 避免同时打两条 Edge TTS 连接触发瞬时限流。
+        self.runtime.spawn(async move {
+            for (accent, source) in requests {
+                let _ = service.audio(&word, accent, &source).await;
+            }
+        });
     }
 
     /// 播放按钮点击：正在播放则停止，否则取音频字节；失败隐藏按钮。

@@ -1,6 +1,9 @@
 //! 英文词典查询、IPA/accent 解析、音频缓存与单飞测试。
 //!
 //! 通过 `PronunciationService::with_base_url` 指向 httpmock，不访问真实网络。
+use std::sync::Arc;
+use std::time::Duration;
+
 use httpmock::prelude::*;
 use stfn::pronunciation::{Accent, AudioSource, PronunciationService};
 
@@ -168,6 +171,34 @@ fn dictionary_audio_is_downloaded_and_cached() {
         let second = service.audio("hello", Accent::Us, &source).await.unwrap();
         assert_eq!(first.as_slice(), audio.as_slice());
         assert!(std::sync::Arc::ptr_eq(&first, &second));
+    });
+    mock.assert_hits(1);
+}
+
+#[test]
+fn concurrent_audio_requests_share_one_download() {
+    let server = MockServer::start();
+    let audio = b"fake-mp3-bytes".to_vec();
+    let mock = server.mock(|when, then| {
+        when.method(GET).path("/hello-us.mp3");
+        then.status(200)
+            .header("content-type", "audio/mpeg")
+            .delay(Duration::from_millis(250))
+            .body(audio.clone());
+    });
+
+    let service = service(&server);
+    let runtime = runtime();
+    let source = AudioSource::DictionaryUrl(format!("{}/hello-us.mp3", server.base_url()));
+    runtime.block_on(async {
+        let (first, second) = tokio::join!(
+            service.audio("hello", Accent::Us, &source),
+            service.audio("hello", Accent::Us, &source)
+        );
+        let first = first.expect("first audio");
+        let second = second.expect("second audio");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(first.as_slice(), audio.as_slice());
     });
     mock.assert_hits(1);
 }

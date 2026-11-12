@@ -27,6 +27,10 @@ const AUDIO_TTL: Duration = Duration::from_secs(60 * 60);
 const DICT_CAPACITY: usize = 256;
 const AUDIO_CAPACITY: usize = 64;
 const AUDIO_MAX_BYTES: usize = 5 * 1024 * 1024;
+// 预加载会让同一批单词有 US/UK 两份音频；给缓存一个总字节上限，
+// 避免长会话堆积。音频只在内存中，不写磁盘。
+const AUDIO_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
+const AUDIO_FETCH_CONCURRENCY: usize = 1;
 const MAX_WORD_CHARS: usize = 64;
 
 /// 发音口音；只有英文使用。
@@ -102,13 +106,18 @@ pub struct PronunciationService {
     client: reqwest::Client,
     base_url: String,
     dict: Mutex<LruCache<String, CacheEntry<Option<Pronunciation>>>>,
-    audio: Mutex<LruCache<AudioKey, CacheEntry<Arc<Vec<u8>>>>>,
+    audio: Mutex<AudioCache>,
     inflight: Mutex<HashMap<String, Vec<oneshot::Sender<Option<Pronunciation>>>>>,
+    inflight_audio: Mutex<AudioWaiters>,
+    audio_slots: tokio::sync::Semaphore,
     tts: Arc<EdgeTts>,
 }
 
 // 音频缓存键：单词 + accent + 来源；generic 使用 US。
 type AudioKey = (String, Accent, AudioSourceKind);
+
+// 同一音频 key 的等待者；预加载与点击共享一次下载。
+type AudioWaiters = HashMap<AudioKey, Vec<oneshot::Sender<Option<Arc<Vec<u8>>>>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum AudioSourceKind {
@@ -133,6 +142,57 @@ impl CacheEntry<Arc<Vec<u8>>> {
     }
 }
 
+/// 音频缓存：条目数 + 总字节数双上限，淘汰最久未使用项。
+struct AudioCache {
+    entries: LruCache<AudioKey, CacheEntry<Arc<Vec<u8>>>>,
+    bytes: usize,
+}
+
+impl AudioCache {
+    fn new() -> Self {
+        Self {
+            entries: LruCache::new(non_zero(AUDIO_CAPACITY)),
+            bytes: 0,
+        }
+    }
+
+    fn get(&mut self, key: &AudioKey) -> Option<Arc<Vec<u8>>> {
+        let now = Instant::now();
+        match self.entries.get(key) {
+            Some(entry) if entry.fresh(now) => Some(entry.value.clone()),
+            Some(_) => {
+                self.remove(key);
+                None
+            }
+            None => None,
+        }
+    }
+
+    fn insert(&mut self, key: AudioKey, value: Arc<Vec<u8>>) {
+        let len = value.len();
+        let entry = CacheEntry {
+            stored_at: Instant::now(),
+            value,
+        };
+        if let Some(old) = self.entries.put(key, entry) {
+            self.bytes = self.bytes.saturating_sub(old.value.len());
+        }
+        self.bytes += len;
+        while self.bytes > AUDIO_CACHE_MAX_BYTES {
+            let Some((_, evicted)) = self.entries.pop_lru() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(evicted.value.len());
+        }
+    }
+
+    fn remove(&mut self, key: &AudioKey) {
+        if let Some(old) = self.entries.pop(key) {
+            self.bytes = self.bytes.saturating_sub(old.value.len());
+        }
+    }
+}
+
 impl PronunciationService {
     /// 生产配置：dictionaryapi.dev + 默认 Edge TTS。
     /// `STFN_DICT_BASE_URL` 仅供集成测试/本地调试覆盖。
@@ -150,8 +210,10 @@ impl PronunciationService {
             client,
             base_url,
             dict: Mutex::new(LruCache::new(non_zero(DICT_CAPACITY))),
-            audio: Mutex::new(LruCache::new(non_zero(AUDIO_CAPACITY))),
+            audio: Mutex::new(AudioCache::new()),
             inflight: Mutex::new(HashMap::new()),
+            inflight_audio: Mutex::new(HashMap::new()),
+            audio_slots: tokio::sync::Semaphore::new(AUDIO_FETCH_CONCURRENCY),
             tts: Arc::new(EdgeTts::new()),
         }
     }
@@ -204,34 +266,62 @@ impl PronunciationService {
         result
     }
 
-    /// 取音频字节：为真人音频下载 URL，否则调用 Edge TTS；按 (word, accent) 缓存。
+    /// 取音频字节：为真人音频下载 URL，否则调用 Edge TTS。
+    /// 同一 (word, accent, source) 的并发请求（预加载 + 点击）合并为一次。
     pub async fn audio(
         &self,
         word: &str,
         accent: Accent,
         source: &AudioSource,
     ) -> Option<Arc<Vec<u8>>> {
-        let key = (
-            word.trim().to_ascii_lowercase(),
-            accent,
-            match source {
-                AudioSource::DictionaryUrl(_) => AudioSourceKind::Dictionary,
-                AudioSource::EdgeTts { .. } => AudioSourceKind::EdgeTts,
-            },
-        );
-        {
-            let mut cache = lock(&self.audio);
-            if let Some(entry) = cache.get(&key) {
-                if entry.fresh(Instant::now()) {
-                    return Some(entry.value.clone());
-                }
-                cache.pop(&key);
-            }
+        let key = audio_key(word, accent, source);
+        if let Some(bytes) = lock(&self.audio).get(&key) {
+            return Some(bytes);
         }
 
-        let bytes = match source {
+        // 单飞：预加载已经在下载时，点击只等待同一个结果，不重复请求。
+        let (tx, rx) = oneshot::channel();
+        let joined = {
+            let mut inflight = lock(&self.inflight_audio);
+            if let Some(waiters) = inflight.get_mut(&key) {
+                waiters.push(tx);
+                true
+            } else {
+                inflight.insert(key.clone(), vec![tx]);
+                false
+            }
+        };
+        if joined {
+            return rx.await.ok().flatten();
+        }
+
+        // 限制同时进行的音频请求，避免预加载 US/UK 时形成 Edge TTS 突发。
+        let _permit = self.audio_slots.acquire().await.ok();
+        let bytes = self.fetch_audio(word, accent, source).await;
+        let result = match bytes {
+            Some(bytes) if !bytes.is_empty() => Some(Arc::new(bytes)),
+            _ => None,
+        };
+        if let Some(bytes) = &result {
+            lock(&self.audio).insert(key.clone(), bytes.clone());
+        }
+
+        let waiters = lock(&self.inflight_audio).remove(&key).unwrap_or_default();
+        for waiter in waiters {
+            let _ = waiter.send(result.clone());
+        }
+        result
+    }
+
+    async fn fetch_audio(
+        &self,
+        word: &str,
+        accent: Accent,
+        source: &AudioSource,
+    ) -> Option<Vec<u8>> {
+        match source {
             AudioSource::DictionaryUrl(url) => match self.download(url).await {
-                Some(bytes) => bytes,
+                Some(bytes) => Some(bytes),
                 // 词典音频 URL 失效（404/5xx/网络错误）时同样退回 Edge TTS，
                 // 不能因为第三方 CDN 临时不可用就丢掉整个发音功能。
                 None => {
@@ -241,36 +331,24 @@ impl PronunciationService {
                         .synthesize_voice(word.trim(), accent.default_voice())
                         .await
                     {
-                        Some(bytes) => bytes,
+                        Some(bytes) => Some(bytes),
                         None => {
                             tracing::debug!("Edge TTS fallback failed");
-                            return None;
+                            None
                         }
                     }
                 }
             },
             AudioSource::EdgeTts { voice } => {
                 match self.tts.synthesize_voice(word.trim(), voice).await {
-                    Some(bytes) => bytes,
+                    Some(bytes) => Some(bytes),
                     None => {
                         tracing::debug!("Edge TTS synthesis failed");
-                        return None;
+                        None
                     }
                 }
             }
-        };
-        if bytes.is_empty() {
-            return None;
         }
-        let bytes = Arc::new(bytes);
-        lock(&self.audio).put(
-            key,
-            CacheEntry {
-                stored_at: Instant::now(),
-                value: bytes.clone(),
-            },
-        );
-        Some(bytes)
     }
 
     fn cached(&self, word: &str) -> Option<Option<Pronunciation>> {
@@ -534,6 +612,18 @@ fn accent_from_audio(url: &str) -> Option<Accent> {
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+// 音频缓存/单飞键：单词 + accent + 来源；generic 使用 US。
+fn audio_key(word: &str, accent: Accent, source: &AudioSource) -> AudioKey {
+    (
+        word.trim().to_ascii_lowercase(),
+        accent,
+        match source {
+            AudioSource::DictionaryUrl(_) => AudioSourceKind::Dictionary,
+            AudioSource::EdgeTts { .. } => AudioSourceKind::EdgeTts,
+        },
+    )
 }
 
 // 单词只含 ASCII 字母/撇号/连字符，URL path 编码只需处理撇号。
