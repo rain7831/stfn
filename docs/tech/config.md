@@ -1,6 +1,6 @@
 # 配置与密钥存储
 
-> 状态：已按 v0.1 实现校准
+> 状态：已按 v0.2.0 实现校准
 > 关联：`README.md`、`settings.md`、`architecture.md`、`cli.md`
 
 ## 1. 文件位置

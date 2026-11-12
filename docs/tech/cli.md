@@ -1,6 +1,6 @@
 # 命令行设计
 
-> 状态：v0.1 已实现；v0.2 设计进行中（`selection` / `--speak`）
+> 状态：v0.2.0 已发布（`selection` / `--speak` / JSON `phonetic`）
 > 关联：`README.md`、`architecture.md`、`providers.md`、`config.md`
 
 ## 1. 命令模型
@@ -91,7 +91,7 @@ $ stfn --source all hello
 ```
 
 - `source` / `target` 为最终使用的语言；`auto` 解析后不出现。
-- `phonetic` 在 v1 恒为 `null`；保留字段。
+- `phonetic` 对英文单词填 US > UK > generic IPA；未命中/非单词为 `null`。
 - `errors` 无错误时为空数组。
 - 字段稳定；新增字段只增不改。
 

@@ -1,6 +1,6 @@
 # STFN 架构设计
 
-> 状态：v0.1 已实现；v0.2 设计进行中
+> 状态：v0.2.0 已发布
 > 关联：`README.md`、`v0.2-plan.md`、`pronunciation.md`、`selection.md`、`ui.md`、`settings.md`、`providers.md`、`cli.md`、`config.md`
 
 ## 1. 目标与约束
@@ -58,7 +58,7 @@
 | `core` | 语言检测、去抖、请求编排、缓存 | tokio, lru |
 | `providers` | Bing / 火山 / 阿里适配器、统一 trait | reqwest, hmac, sha2, sha1 |
 | `pronunciation` | 英文单词词典查询、音标解析、音频缓存 | reqwest, lru |
-| `tts` | Edge TTS 合成与音频播放（v0.2） | msedge-tts, rodio |
+| `tts` | Edge TTS 合成、句子朗读、PipeWire 音频播放 | msedge-tts, rodio |
 | `config` | 配置读写、校验、迁移 | serde, toml_edit |
 | `secrets` | Secret Service / 0600 文件 | keyring, zeroize |
 | `platform` | niri / Wayland 细节（app-id） | gdk4-wayland |
@@ -146,7 +146,7 @@ struct ProviderError {
 - 不落盘翻译内容；缓存仅内存，退出即清。
 - 所有云 API 走 TLS（rustls）。
 - `--notify` 会把译文交给桌面通知服务，属于用户显式操作。
-- 英文词典查询会把单词发送给 dictionaryapi.dev；TTS 会把待朗读文本发送给 Edge TTS；不记录、不遥测。
+- 英文词典查询会把单词发送给 dictionaryapi.dev；单词/句子音频会发送给有道；Edge TTS 会把待朗读文本发送给微软。均不记录、不遥测。
 - 选区翻译只读取 primary selection，不覆盖剪贴板。
 - 设置页修改未保存时返回/退出会弹确认；密钥在 UI 中显示为 `******`，清空保存才删除。
 
@@ -197,7 +197,7 @@ struct ProviderError {
 | preedit 触发 changed | 拼音被翻译 | 实测 fcitx5；必要时监听 IM context |
 | Secret Service 不可用 / 锁定 | 密钥无法保存 | 明确提示；用户确认后回退 0600 |
 | 云厂商签名实现偏差 | 401 | 火山已实测；阿里用官方参数 + mock 测试，真实密钥待验 |
-| 词典 API 不可用 | 音标缺失 | 超时/404 静默隐藏；不阻塞翻译 |
-| Edge TTS 非官方 | 发音不可用 | 标记实验性；失败只隐藏播放按钮 |
+| 词典 API 不可用 | 音标缺失 | 超时/404 静默隐藏；瞬时失败不缓存，不阻塞翻译 |
+| Edge TTS 非官方 | 发音不可用 | 有道兜底；仍失败保留播放按钮供重试 |
 | primary selection 不被应用设置 | 选区翻译失败 | 明确提示；不做剪贴板/Ctrl+C 回退 |
 | 多进程内存重复 | 多窗口占用高 | 接受短生命周期；关闭即退出 |

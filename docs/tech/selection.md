@@ -1,6 +1,6 @@
 # niri 选区翻译设计
 
-> 状态：待审核 · 目标版本：v0.2.0
+> 状态：v0.2.0 已发布
 > 关联：`v0.2-plan.md`、`architecture.md`、`cli.md`、`ui.md`
 
 ## 1. 目标与范围
@@ -171,13 +171,16 @@ let text = clipboard.read_text_future().await?;
 
 ## 11. 验收
 
-- [ ] `stfn selection` 新进程打开窗口，不依赖已有实例。
-- [ ] 在 niri 的浏览器/GTK/终端选中英文或中文，按 `Mod+Shift+Y` 自动填入并翻译。
-- [ ] 空选区显示提示，不读取旧剪贴板。
-- [ ] 超过 5000 字符直接拒绝：不填入、不翻译，并提示。
-- [ ] 注入后输入框聚焦，可直接编辑。
-- [ ] 连续触发可打开多个独立窗口；关闭即退出。
-- [ ] 不引入 `wl-clipboard`/`wtype` 运行时依赖。
+- [x] `stfn selection` 新进程打开窗口，不依赖已有实例。
+- [x] `stfn selection` 读取 primary selection（用 `wl-copy --primary` 模拟）并自动填入、翻译。
+- [ ] 在 niri 的浏览器/GTK/终端中通过 `Mod+Shift+Y` 做跨应用手工抽查（依赖用户绑定）。
+- [x] 空选区显示提示，不读取旧剪贴板。
+- [x] 超过 5000 字符直接拒绝：不填入、不翻译，并提示。
+- [x] 注入后输入框聚焦，可直接编辑。
+- [x] 连续触发可打开多个独立窗口；关闭即退出。
+- [x] 不引入 `wl-clipboard`/`wtype` 运行时依赖。
+
+> 未勾选项为跨应用 owner + niri 快捷键的手工抽查；`stfn selection` 主流程已通过。
 
 ## 12. 风险
 

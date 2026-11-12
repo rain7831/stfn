@@ -1,6 +1,6 @@
 # 应用内设置页与密钥存储
 
-> 状态：v0.1 已实现；v0.2 进程模型设计进行中
+> 状态：v0.2.0 已发布
 > 关联：`README.md`、`ui.md`、`config.md`、`architecture.md`、`selection.md`
 
 ## 1. 入口与形态

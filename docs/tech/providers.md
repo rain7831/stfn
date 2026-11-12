@@ -1,6 +1,6 @@
 # 翻译源设计
 
-> 状态：v0.1 已实现；v0.2 音标/发音为应用侧后处理
+> 状态：v0.2.0 已发布；音标/发音为应用侧后处理
 > 关联：`architecture.md`、`config.md`、`settings.md`
 
 ## 1. 统一接口
@@ -15,7 +15,7 @@ pub trait Provider: Send + Sync {
 ```
 
 - `TranslateRequest { text, from, to }`。
-- `TranslateOutput { text, detected, phonetics, audio, latency_ms }`。
+- `TranslateOutput { text, detected, latency_ms }`；音标/音频由 `pronunciation` 后处理。
 - provider 只负责协议与解析；不做去抖、缓存、UI。
 - 所有 provider 共用 `reqwest::Client`（连接池、rustls、超时、Bing 需要 cookie store）。
 
@@ -26,7 +26,7 @@ pub trait Provider: Send + Sync {
 | 中→英 / 英→中 | ✅ | ✅ | ✅ |
 | 自动识别源语言 | ✅ | ✅（可显式传源语言） | ✅ |
 | 音标（英文） | ❌（v0.2 由词典后处理） | ❌ | ❌ |
-| 朗读 | v0.2（词典音频 / Edge TTS） | 需另开语音合成 | 需另开语音合成 |
+| 朗读 | ❌（应用侧后处理） | ❌（应用侧后处理） | ❌（应用侧后处理） |
 | 凭据 | 无 | Access Key / Secret Key | AccessKey ID / Secret |
 | 区域配置 | 无 | 无（内部固定 cn-north-1） | 无（内部固定 cn-hangzhou） |
 
@@ -77,7 +77,8 @@ fromLang=en&to=zh-Hans&text=hello&token=<token>&key=<key>&tryFetchingGenderDebia
 
 - Bing 的 `translations[].transliteration` 是中文拼音（如 `Nǐ hǎo`），不是英文 IPA；`inputTransliteration` 也是中文输入拼音。
 - v0.2 不把 Bing transliteration 当英文音标使用；英文音标由 `dictionaryapi.dev` 后处理。
-- `--speak` 使用 Edge TTS / 词典音频，失败返回非零；不阻塞翻译结果。
+- 单词音频顺序：词典真人音频 -> 有道 -> Edge TTS；句子朗读：Edge TTS -> 有道兜底。
+- `--speak` 使用 Edge TTS，失败返回非零；不阻塞已输出的翻译结果。
 
 ### 3.4 风险
 
@@ -251,5 +252,5 @@ trim → 空？ => Empty
 
 - Bing 网页会话结构变化、UA 要求。
 - 阿里云免费额度与长文本行为。
-- Edge TTS 的 Rust 封装成熟度。
+- Edge TTS 非官方且偶发 403；已加一次重试与有道兜底。
 - 长文本（>1000 字）在各平台的截断 / 报错行为。
