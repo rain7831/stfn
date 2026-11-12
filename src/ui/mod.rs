@@ -2251,14 +2251,48 @@ fn text_view_text(view: &gtk::TextView) -> String {
         .to_string()
 }
 
+thread_local! {
+    // 手动模式下覆盖系统 GTK 主题的颜色；切回 default 时必须移除。
+    static MANUAL_THEME: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
+}
+
+// 系统级 GTK 主题（例如 Noctalia 生成的 ~/.config/gtk-4.0/gtk.css）会用
+// @define-color 固定一套颜色，优先级高于普通应用。手动覆盖时在 USER+1
+// 优先级重新加载 libadwaita 自带主题（含 light/dark media query 与卡片规则），
+// 选 default 时移除，让系统主题重新接管。
+const ADWAITA_THEME_RESOURCE: &str = "/org/gnome/Adwaita/styles/gtk.css";
+
 /// 把配置的手动配色应用到 libadwaita；default 表示跟随系统。
 fn apply_color_scheme(scheme: ColorScheme) {
-    let scheme = match scheme {
+    let adw_scheme = match scheme {
         ColorScheme::Default => adw::ColorScheme::Default,
         ColorScheme::Light => adw::ColorScheme::ForceLight,
         ColorScheme::Dark => adw::ColorScheme::ForceDark,
     };
-    adw::StyleManager::default().set_color_scheme(scheme);
+    adw::StyleManager::default().set_color_scheme(adw_scheme);
+
+    let Some(display) = gtk::gdk::Display::default() else {
+        return;
+    };
+
+    MANUAL_THEME.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let Some(provider) = slot.take() {
+            gtk::style_context_remove_provider_for_display(&display, &provider);
+        }
+
+        if scheme == ColorScheme::Default {
+            return;
+        }
+        let provider = gtk::CssProvider::new();
+        provider.load_from_resource(ADWAITA_THEME_RESOURCE);
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_USER + 1,
+        );
+        *slot = Some(provider);
+    });
 }
 
 /// 给 GtkTextView 设置 16px 字号和透明背景，避免和结果字号不一致。
@@ -2272,7 +2306,7 @@ fn install_css() {
         gtk::style_context_add_provider_for_display(
             &display,
             &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            gtk::STYLE_PROVIDER_PRIORITY_USER + 2,
         );
     }
 }
