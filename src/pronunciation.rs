@@ -225,7 +225,16 @@ impl PronunciationService {
         }
 
         let bytes = match source {
-            AudioSource::DictionaryUrl(url) => self.download(url).await?,
+            AudioSource::DictionaryUrl(url) => match self.download(url).await {
+                Some(bytes) => bytes,
+                // 词典音频 URL 失效（404/5xx/网络错误）时同样退回 Edge TTS，
+                // 不能因为第三方 CDN 临时不可用就丢掉整个发音功能。
+                None => {
+                    self.tts
+                        .synthesize_voice(word.trim(), accent.default_voice())
+                        .await?
+                }
+            },
             AudioSource::EdgeTts { voice } => self.tts.synthesize_voice(word.trim(), voice).await?,
         };
         if bytes.is_empty() {
